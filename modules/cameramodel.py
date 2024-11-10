@@ -84,6 +84,10 @@ def transform(X, C, Theta, phi_x, W, r):
     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
     return X_model
 
+def distance(X, C, Theta):
+    X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    return X_rot[:,:,2]
+
 def nearest_dot(X, V):
     n = X.shape[0]
     M = np.full((n, n), -1)
@@ -148,7 +152,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0, X_mask='default'
             beta = W / 2 / tan_phi_x_2
         X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
 
-        X_diff = X_model - X_pix_center
+        # X_diff = X_model - X_pix_center
+        X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * N * K)
         if iters % 1000 == 0: print(f"{iters} : {E[iters]}")
         if iters >= 1:
@@ -178,20 +183,22 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0, X_mask='default'
         D['E', 'X_model'] = X_diff / (N * K)
 
         D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
-        if X_mask == 'default':
+        if (X_mask == 'default').all():
             D['E', 'X'][:2,:] = 0
             D['E', 'X'][2,1] = 0
-        elif X_mask == 'zDot':
+        elif (X_mask == 'zDot').all():
             D['E', 'X'][:2,:] = 0
             D['E', 'X'][2,2] = 0
         else:
             D['E', 'X'] = D['E', 'X'] * X_mask
 
-        if C_mask == 'default': D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-        elif C_mask != 'none': D['E', 'C'] = D['E', 'C'] * C_mask
+        # if C_mask == 'default': D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
+        # elif C_mask != 'none': D['E', 'C'] = D['E', 'C'] * C_mask
+        D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X']) * C_mask
 
-        if Theta_mask == 'default': D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
-        elif Theta_mask != 'none': D['E', 'Theta'] = D['E', 'Theta'] * Theta_mask
+        # if Theta_mask == 'default': D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
+        # elif Theta_mask != 'none': D['E', 'Theta'] = D['E', 'Theta'] * Theta_mask
+        D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta']) * Theta_mask
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - beta / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
@@ -199,13 +206,17 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0, X_mask='default'
 
         if optimizer == 'SGD':
             X = sgd(X, D['E', 'X'], lr)
-            if C_mask != 'none': C = sgd(C, D['E', 'C'], lr)
-            if Theta_mask != 'none': Theta = sgd(Theta, D['E', 'Theta'], lr)
+            # if C_mask != 'none': C = sgd(C, D['E', 'C'], lr)
+            C = sgd(C, D['E', 'C'], lr)
+            # if Theta_mask != 'none': Theta = sgd(Theta, D['E', 'Theta'], lr)
+            Theta = sgd(Theta, D['E', 'Theta'], lr)
             if phi_x_mask: phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
         elif optimizer == 'Adam':
             X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999)
-            if C_mask != 'none': C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
-            if Theta_mask != 'none': Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
+            # if C_mask != 'none': C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
+            C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
+            # if Theta_mask != 'none': Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
+            Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
             if phi_x_mask: phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1, rho_1=0.9, rho_2=0.999)
 
     print(f'E_min = {E_min}')
