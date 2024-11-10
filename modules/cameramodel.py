@@ -274,7 +274,7 @@ def rotate_scene(V, R):
     if V.ndim == 2: return V @ R.T
     elif V.ndim == 3: return np.einsum('kl,ijl->ijk', R, V)
 
-def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_traces=False, show_nums=False):
+def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_projections=True, show_traces=False, show_nums=False):
     R = ryxz(Theta)
 
     camera_dir = np.array([0.0, 0.0, 1.0])
@@ -286,7 +286,8 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_tr
                                [- tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners = np.einsum('ijk,nk->inj', R, camera_corners)
 
-    X_proj = project(X, C, Theta, f=f)
+    if show_projections:
+        X_proj = project(X, C, Theta, f=f)
 
     # Поворот всей системы вокруг оси x на угол -pi/2
     Ryz = np.array([[1, 0, 0],
@@ -296,7 +297,8 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_tr
     C = rotate_scene(C, Ryz)
     camera_dir = rotate_scene(camera_dir, Ryz)
     camera_corners = rotate_scene(camera_corners, Ryz)
-    X_proj = rotate_scene(X_proj, Ryz)
+    if show_projections:
+        X_proj = rotate_scene(X_proj, Ryz)
 
 
     if show_traces:
@@ -315,7 +317,8 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_tr
 
     ax.scatter(*X.T, marker='o', s=40, color='red')
 
-    ax.plot(*X_proj.reshape(X_proj.shape[0] * X_proj.shape[1], 3).T, linestyle=' ', marker='o', markersize=3, color='red')
+    if show_projections:
+        ax.plot(*X_proj.reshape(X_proj.shape[0] * X_proj.shape[1], 3).T, linestyle=' ', marker='o', markersize=3, color='red')
 
     ax.add_collection(Line3DCollection([[C[j,:], C[j,:] + f * camera_dir[j,:]] for j in range(C.shape[0])],
                                        linewidth=1.0, linestyle='--', colors='blue'))
@@ -341,5 +344,5 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_tr
             ax.text(*X[i,:], f'x{i}')
         for j in range(C.shape[0]):
             ax.text(*C[j,:], f'c{j}')
-        for i in range(X.shape[0]):
-            ax.text(*X[i,:], f'{i}')
+        # for i in range(X.shape[0]):
+        #     ax.text(*X[i,:], f'{i}')
