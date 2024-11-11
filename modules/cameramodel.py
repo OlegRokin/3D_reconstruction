@@ -9,7 +9,8 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 def error(X_pix, X_model):
     N, K = X_pix.shape[:2]
     X_pix_center = X_pix.astype(np.float64) + 0.5
-    X_diff = X_model - X_pix_center
+    # X_diff = X_model - X_pix_center
+    X_diff = np.nan_to_num(X_model - X_pix_center)
     return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K) 
 
 def rx(theta):
@@ -183,22 +184,26 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0, X_mask='default'
         D['E', 'X_model'] = X_diff / (N * K)
 
         D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
-        if (X_mask == 'default').all():
-            D['E', 'X'][:2,:] = 0
-            D['E', 'X'][2,1] = 0
-        elif (X_mask == 'zDot').all():
-            D['E', 'X'][:2,:] = 0
-            D['E', 'X'][2,2] = 0
-        else:
-            D['E', 'X'] = D['E', 'X'] * X_mask
+        # if (X_mask == 'default').all():
+        #     D['E', 'X'][:2,:] = 0
+        #     D['E', 'X'][2,1] = 0
+        # elif (X_mask == 'zDot').all():
+        #     D['E', 'X'][:2,:] = 0
+        #     D['E', 'X'][2,2] = 0
+        # else:
+        #     D['E', 'X'] = D['E', 'X'] * X_mask
 
         # if C_mask == 'default': D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
         # elif C_mask != 'none': D['E', 'C'] = D['E', 'C'] * C_mask
-        D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X']) * C_mask
+        # D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X']) * C_mask
+        D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
+        D['E', 'C'][0,:] = D['E', 'C'][-1,:] = 0.0
 
         # if Theta_mask == 'default': D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
         # elif Theta_mask != 'none': D['E', 'Theta'] = D['E', 'Theta'] * Theta_mask
-        D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta']) * Theta_mask
+        # D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta']) * Theta_mask
+        D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
+        D['E', 'Theta'][0,:] = 0.0
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - beta / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
