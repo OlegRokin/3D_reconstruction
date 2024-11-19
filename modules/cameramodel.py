@@ -110,8 +110,10 @@ def find_dots(X_pix, W, r, C, Theta, phi_x):
 
 def sgd(x, grad_x, lr, ret_delta=False):
     delta_x = - lr * grad_x
-    if ~ret_delta: return x + delta_x
-    else: return x + delta_x, delta_x
+    # if ~ret_delta: return x + delta_x
+    # else: return x + delta_x, delta_x
+    if ret_delta: return x + delta_x, delta_x
+    else: return x + delta_x
 
 def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
     s_new = rho_1 * s + (1 - rho_1) * grad_x
@@ -119,12 +121,14 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
     s_corr = s_new / (1 - rho_1**t)
     r_corr = r_new / (1 - rho_2**t)
     delta_x = - lr * s_corr / (1e-8 + np.sqrt(r_corr))
-    if ~ret_delta: return x + delta_x, s_new, r_new
-    else: return x + delta_x, s_new, r_new, delta_x
+    # if ~ret_delta: return x + delta_x, s_new, r_new
+    # else: return x + delta_x, s_new, r_new, delta_x
+    if ret_delta: return x + delta_x, s_new, r_new, delta_x
+    else: return x + delta_x, s_new, r_new
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask='default', C_mask='default', Theta_mask='default', phi_x_mask=True,
-        optimizer='SGD', patience=2000, factor=2, print_step=1000):
+        optimizer='SGD', patience=2000, factor=2, eps=0.0, print_step=1000):
     X_pix_center = X_pix.astype(np.float64) + 0.5
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
@@ -140,6 +144,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         beta = W / 2 / tan_phi_x_2
 
     delta_X, delta_C = np.zeros_like(X), np.zeros_like(C)
+    # Delta_X, Delta_C = np.zeros((patience, *X.shape)), np.zeros((patience, *C.shape))     # замедляет процесс аж в 1.5 раза
 
     s_X = r_X = np.zeros_like(X)
     s_C = r_C = np.zeros_like(C)
@@ -165,17 +170,28 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # X_diff = X_model - X_pix_center
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * N * K)
-        # if iters % print_step == 0: print(f"{iters} : {E[iters]}")
-        if iters % print_step == 0: print(f"{iters} : {E[iters]}, {np.linalg.norm(delta_X) = }, {np.linalg.norm(delta_C) = }")
+        if iters % print_step == 0: print(f"{iters} : {E[iters]}")
+        # if iters % print_step == 0: print(f"{iters} : {E[iters]}, {np.max(np.abs(np.sum(Delta_X, axis=0))) = }, {np.max(np.abs(np.sum(Delta_C, axis=0))) = }")
+        # if iters % print_step == 0: print(f"{iters} : {E[iters]}, {np.max(np.abs(delta_X)) = }, {np.max(np.abs(delta_C)) = }")
         if iters >= 1:
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
+            # if iters < patience:
+            #     Delta_X[iters,:,:] = delta_X
+            #     Delta_C[iters,:,:] = delta_C
             if iters >= patience:
+            # else:
+                # Delta_X = np.concatenate((Delta_X[1:,:,:], delta_X[np.newaxis,:,:]), axis=0)
+                # Delta_C = np.concatenate((Delta_C[1:,:,:], delta_C[np.newaxis,:,:]), axis=0)
                 if E[iters] >= E[iters - patience]:
                     print(f"{iters} : Decrease LR to {lr / factor}")
                     lr /= factor
                     if lr == 0.0 or E[iters] - E[iters - patience] == 0.0: break
+            if eps > 0.0 and (np.abs(delta_X) < eps).all() and (np.abs(delta_C) < eps).all():
+                print('Almost zero changes')
+                break
+            # if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
         if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
 
         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
@@ -223,7 +239,6 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         if optimizer == 'SGD':
             if X_mask != 'none':
                 X, delta_X = sgd(X, D['E', 'X'], lr, ret_delta=True)
-                print(f'{X.shape = }, {delta_X.shape = }')
             # if C_mask != 'none': C = sgd(C, D['E', 'C'], lr)
             C, delta_C = sgd(C, D['E', 'C'], lr, ret_delta=True)
             # if Theta_mask != 'none': Theta = sgd(Theta, D['E', 'Theta'], lr)
