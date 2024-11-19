@@ -108,6 +108,9 @@ def find_dots(X_pix, W, r, C, Theta, phi_x):
         nearest_dots[i,:] = nearest_dot(C[j_notnan,:], x_proj[j_notnan,:])
     return nearest_dots
 
+def sphere_project(x, o, R):
+    return o + R * (x - o) / np.linalg.norm(x - o)
+
 def sgd(x, grad_x, lr, ret_delta=False):
     delta_x = - lr * grad_x
     # if ~ret_delta: return x + delta_x
@@ -128,7 +131,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask='default', C_mask='default', Theta_mask='default', phi_x_mask=True,
-        optimizer='SGD', patience=2000, factor=2, eps=0.0, print_step=1000):
+        optimizer='SGD', patience=2000, factor=2, eps=0.0, print_step=1000, ret_arrays=False):
     X_pix_center = X_pix.astype(np.float64) + 0.5
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
@@ -143,7 +146,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         tan_phi_x_2 = np.tan(phi_x / 2)
         beta = W / 2 / tan_phi_x_2
 
-    delta_X, delta_C = np.zeros_like(X), np.zeros_like(C)
+    if eps > 0.0: delta_X, delta_C = np.zeros_like(X), np.zeros_like(C)
     # Delta_X, Delta_C = np.zeros((patience, *X.shape)), np.zeros((patience, *C.shape))     # замедляет процесс аж в 1.5 раза
 
     s_X = r_X = np.zeros_like(X)
@@ -155,7 +158,16 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E = np.zeros(max_iters)
     E_min = np.inf
 
-    for iters in range(max_iters):      
+    if ret_arrays:
+        X_list, C_list, Theta_list,phi_x_list = [], [], [], []
+
+    for iters in range(max_iters):
+        if ret_arrays and iters % 100 == 0:
+            X_list.append(X)
+            C_list.append(C)
+            Theta_list.append(Theta)
+            phi_x_list.append(phi_x)
+
         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
 
         Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
@@ -224,7 +236,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # elif C_mask != 'none': D['E', 'C'] = D['E', 'C'] * C_mask
         # D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X']) * C_mask
         D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-        D['E', 'C'][0,:] = D['E', 'C'][-1,:] = 0.0
+        # D['E', 'C'][0,:] = D['E', 'C'][-1,:] = 0.0
+        D['E', 'C'][0,:] = 0.0
 
         # if Theta_mask == 'default': D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
         # elif Theta_mask != 'none': D['E', 'Theta'] = D['E', 'Theta'] * Theta_mask
@@ -238,23 +251,30 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if optimizer == 'SGD':
             if X_mask != 'none':
-                X, delta_X = sgd(X, D['E', 'X'], lr, ret_delta=True)
+                if eps > 0.0: X, delta_X = sgd(X, D['E', 'X'], lr, ret_delta=True)
+                else: X = sgd(X, D['E', 'X'], lr, ret_delta=False)
             # if C_mask != 'none': C = sgd(C, D['E', 'C'], lr)
-            C, delta_C = sgd(C, D['E', 'C'], lr, ret_delta=True)
+            if eps > 0.0: C, delta_C = sgd(C, D['E', 'C'], lr, ret_delta=True)
+            else: C = sgd(C, D['E', 'C'], lr, ret_delta=False)
             # if Theta_mask != 'none': Theta = sgd(Theta, D['E', 'Theta'], lr)
             Theta = sgd(Theta, D['E', 'Theta'], lr)
             if phi_x_mask: phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
         elif optimizer == 'Adam':
             if X_mask != 'none':
-                X, s_X, r_X, delta_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+                if eps > 0.0: X, s_X, r_X, delta_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+                else: X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
             # if C_mask != 'none': C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
-            C, s_C, r_C, delta_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+            if eps > 0.0: C, s_C, r_C, delta_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+            else: C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
             # if Theta_mask != 'none': Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
             Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
             if phi_x_mask: phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1, rho_1=0.9, rho_2=0.999)
 
+        C[-1,:] = sphere_project(C[-1,:], C[0,:], 1.0)
+
     print(f'E_min = {E_min}')
-    return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
+    if ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
+    else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
 
 def get_pixels(image):
     labeled_image, num_features = ndimage.label(image > 1e-1)
