@@ -8,7 +8,7 @@ from matplotlib.widgets import Slider
 
 def error(X_pix, X_model):
     N, K = X_pix.shape[:2]
-    X_pix_center = X_pix.astype(np.float64) + 0.5
+    X_pix_center = X_pix + 0.5
     # X_diff = X_model - X_pix_center
     X_diff = np.nan_to_num(X_model - X_pix_center)
     return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K) 
@@ -73,7 +73,7 @@ def project(X, C, Theta, f=1.0, dir_only=False):
     else: return X_proj + C[np.newaxis,:,:]
 
 def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
-    X_pix_center = X_pix.astype(np.float64) + 0.5
+    X_pix_center = X_pix + 0.5
     X_proj = np.full((*X_pix.shape[:2], 3), f)
     X_proj[:,:,:2] = 2 * f * np.tan(phi_x / 2) * (X_pix_center[:,:,:2] / W - np.array([0.5, 0.5 / r]))
     X_proj = np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
@@ -136,7 +136,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2):
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True,
         optimizer='SGD', patience=2000, factor=2, print_step=1000, ret_arrays=False):
-    X_pix_center = X_pix.astype(np.float64) + 0.5
+    X_pix_center = X_pix + 0.5
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
     X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
@@ -162,7 +162,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E = np.zeros(max_iters)
     E_min = np.inf
 
-    R = np.linalg.norm(C[0,:] - C[-1,:])
+    r = np.linalg.norm(C[0,:] - C[-1,:])
 
     # V = np.zeros(3 * N + 6 * K + 1)
     # V[: 3*N] = X.ravel()
@@ -300,7 +300,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # Theta = V[3*N+3*K : -1].reshape(Theta.shape)
         # phi_x = V[-1]
 
-        C[-1,:] = sphere_project(C[-1,:], C[0,:], R)
+        C[-1,:] = sphere_project(C[-1,:], C[0,:], r)
 
     print(f'{E_min = }')
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
@@ -442,7 +442,7 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
         # for i in range(X.shape[0]):
         #     ax.text(*X[i,:], f'{i}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H):
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
@@ -513,7 +513,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H):
     ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
 
     dist = distance(X, C, Theta)
-    points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=20/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
+    points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=dist_scale/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
 
 
     def update(val):
@@ -556,7 +556,90 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H):
 
 
         points.set_offsets(X_pix[I_visible, j_slider.val, :])
-        points.set_sizes(20/dist[I_visible, j_slider.val])
+        points.set_sizes(dist_scale/dist[I_visible, j_slider.val])
         
         
     j_slider.on_changed(update)
+
+def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
+    if X_pix.shape[0] < 8:
+        raise ValueError(f"Expected X_pix to have shape[0] >= 8")
+    if X_pix.shape[1] != 2:
+        raise ValueError(f"Expected X_pix to have shape[1] = 2")
+
+    X_pix_center = X_pix + 0.5
+    X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
+
+    A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
+                         X_hom[:,1,0] * X_hom[:,0,1],
+                         X_hom[:,1,0] * X_hom[:,0,2],
+                         X_hom[:,1,1] * X_hom[:,0,0],
+                         X_hom[:,1,1] * X_hom[:,0,1],
+                         X_hom[:,1,1] * X_hom[:,0,2],
+                         X_hom[:,1,2] * X_hom[:,0,0],
+                         X_hom[:,1,2] * X_hom[:,0,1],
+                         X_hom[:,1,2] * X_hom[:,0,2]))
+    U, d, Vh = np.linalg.svd(A)
+    f = Vh[-1]
+    F = f.reshape(3, 3)
+
+    if make_rank_2 and np.linalg.matrix_rank(F) != 2:
+        U2, d2, Vh2 = np.linalg.svd(F)
+        F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
+
+    if not ret_A: return F
+    else: F, A
+
+def get_scene_from_F(X_pix, F, W, H, phi_x):
+    if X_pix.shape[1] != 2:
+        raise ValueError(f"Expected X_pix to have shape[1] = 2")
+    
+    X_pix_center = X_pix + 0.5
+
+    alpha_x = alpha_y = W / (2 * np.tan(phi_x / 2))
+    p_x, p_y = W / 2, H / 2
+    K_ = np.array([[alpha_x, 0.0, p_x],
+                   [0.0, alpha_y, p_y],
+                   [0.0, 0.0, 1]])
+    
+    P1 = K_ @ np.column_stack((np.eye(3), np.zeros(3)))
+    E = K_.T @ F @ K_
+    U, d, Vh = np.linalg.svd(E)
+
+    W_ = np.array([[0, -1, 0],
+                   [1, 0, 0],
+                   [0, 0, 1]])
+    R = U @ W_.T @ Vh
+    t = U[:,-1]
+
+    P2 = K_ @ np.column_stack((R, t))
+
+    X = np.zeros((X_pix_center.shape[0], 3))
+    for i in range(X.shape[0]):
+        x1, y1 = X_pix_center[i,0,:]
+        x2, y2 = X_pix_center[i,1,:]
+        A = np.vstack((x1 * P1[2] - P1[0],
+                       y1 * P1[2] - P1[1],
+                       x2 * P2[2] - P2[0],
+                       y2 * P2[2] - P2[1]))
+        U2, d2, Vh2 = np.linalg.svd(A)
+        x = Vh2[-1]
+        x = x / x[-1]
+        X[i] = x[:-1]
+    
+    RT = R.T
+    C = np.vstack((np.zeros(3), - RT @ t))
+
+    c_x, s_x = np.sqrt(RT[1,0]**2 + RT[1,1]**2), - RT[1,2]
+    c_y, s_y = RT[2,2] / c_x, RT[0,2] / c_x
+    c_z, s_z = RT[1,1] / c_x, RT[1,0] / c_x
+    theta_x = np.arctan2(s_x, c_x)
+    theta_y = np.arctan2(s_y, c_y)
+    theta_z = np.arctan2(s_z, c_z)
+    Theta = np.array([[0.0, 0.0, 0.0],
+                      [theta_x, theta_y, theta_z]])
+    
+    if np.linalg.norm(RT - ryxz(Theta)[1]) > 1e-10:
+        print('OH NO')
+    
+    return X, C, Theta
