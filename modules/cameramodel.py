@@ -3,8 +3,8 @@ NAME = "cameramodel"
 import numpy as np
 import scipy.ndimage as ndimage
 import matplotlib.patches as patches
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
+from matplotlib.widgets import Slider
 
 def error(X_pix, X_model):
     N, K = X_pix.shape[:2]
@@ -111,27 +111,31 @@ def find_dots(X_pix, W, r, C, Theta, phi_x):
 def sphere_project(x, o, R):
     return o + R * (x - o) / np.linalg.norm(x - o)
 
-def sgd(x, grad_x, lr, ret_delta=False):
-    delta_x = - lr * grad_x
-    # if ~ret_delta: return x + delta_x
-    # else: return x + delta_x, delta_x
-    if ret_delta: return x + delta_x, delta_x
-    else: return x + delta_x
+# def sgd(x, grad_x, lr, ret_delta=False):
+    # delta_x = - lr * grad_x
+    # # if ~ret_delta: return x + delta_x
+    # # else: return x + delta_x, delta_x
+    # if ret_delta: return x + delta_x, delta_x
+    # else: return x + delta_x
+def sgd(x, grad_x, lr):
+    return x - lr * grad_x
 
-def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
+# def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
+def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2):
     s_new = rho_1 * s + (1 - rho_1) * grad_x
     r_new = rho_2 * r + (1 - rho_2) * grad_x**2
     s_corr = s_new / (1 - rho_1**t)
     r_corr = r_new / (1 - rho_2**t)
-    delta_x = - lr * s_corr / (1e-8 + np.sqrt(r_corr))
-    # if ~ret_delta: return x + delta_x, s_new, r_new
-    # else: return x + delta_x, s_new, r_new, delta_x
-    if ret_delta: return x + delta_x, s_new, r_new, delta_x
-    else: return x + delta_x, s_new, r_new
+    # delta_x = - lr * s_corr / (1e-8 + np.sqrt(r_corr))
+    # # if ~ret_delta: return x + delta_x, s_new, r_new
+    # # else: return x + delta_x, s_new, r_new, delta_x
+    # if ret_delta: return x + delta_x, s_new, r_new, delta_x
+    # else: return x + delta_x, s_new, r_new
+    return x - lr * s_corr / (1e-8 + np.sqrt(r_corr)), s_new, r_new
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-        X_mask='default', C_mask='default', Theta_mask='default', phi_x_mask=True,
-        optimizer='SGD', patience=2000, factor=2, eps=0.0, print_step=1000, ret_arrays=False):
+        X_mask=True, phi_x_mask=True,
+        optimizer='SGD', patience=2000, factor=2, print_step=1000, ret_arrays=False):
     X_pix_center = X_pix.astype(np.float64) + 0.5
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
@@ -142,11 +146,11 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
     D['X_model', 'X_rot'] = np.zeros((N, K, 2, 3))
 
-    if ~phi_x_mask:
+    if not phi_x_mask:
         tan_phi_x_2 = np.tan(phi_x / 2)
         beta = W / 2 / tan_phi_x_2
 
-    if eps > 0.0: delta_X, delta_C = np.zeros_like(X), np.zeros_like(C)
+    # if eps > 0.0: delta_X, delta_C = np.zeros_like(X), np.zeros_like(C)
     # Delta_X, Delta_C = np.zeros((patience, *X.shape)), np.zeros((patience, *C.shape))     # замедляет процесс аж в 1.5 раза
 
     s_X = r_X = np.zeros_like(X)
@@ -157,6 +161,15 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     iters = 0
     E = np.zeros(max_iters)
     E_min = np.inf
+
+    R = np.linalg.norm(C[0,:] - C[-1,:])
+
+    # V = np.zeros(3 * N + 6 * K + 1)
+    # V[: 3*N] = X.ravel()
+    # V[3*N : 3*N+3*K] = C.ravel()
+    # V[3*N+3*K : -1] = Theta.ravel()
+    # V[-1] = phi_x
+    # Delta_V, s_V, r_V = np.zeros_like(V), np.zeros_like(V), np.zeros_like(V)
 
     if ret_arrays:
         X_list, C_list, Theta_list,phi_x_list = [], [], [], []
@@ -200,9 +213,9 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     print(f"{iters} : Decrease LR to {lr / factor}")
                     lr /= factor
                     if lr == 0.0 or E[iters] - E[iters - patience] == 0.0: break
-            if eps > 0.0 and (np.abs(delta_X) < eps).all() and (np.abs(delta_C) < eps).all():
-                print('Almost zero changes')
-                break
+            # if eps > 0.0 and (np.abs(delta_X) < eps).all() and (np.abs(delta_C) < eps).all():
+            #     print('Almost zero changes')
+            #     break
             # if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
         if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
 
@@ -212,7 +225,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
 
         D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = beta / X_rot[:,:,2]
-        D['X_model', 'X_rot'][:,:,0,1] = D['X_model', 'X_rot'][:,:,1,0] = 0
+        # D['X_model', 'X_rot'][:,:,0,1] = D['X_model', 'X_rot'][:,:,1,0] = 0
         D['X_model', 'X_rot'][:,:,:,2] = - beta / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
 
         D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
@@ -221,7 +234,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         D['E', 'X_model'] = X_diff / (N * K)
 
-        if X_mask != 'none':
+        if X_mask:
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
         # if (X_mask == 'default').all():
         #     D['E', 'X'][:2,:] = 0
@@ -249,32 +262,49 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['X_model', 'phi_x'] = - beta / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
             D['E', 'phi_x'] = np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
 
+        # # с таким подходом возможно иногда работает побыстрее
+        # Delta_V[: 3*N] = D['E', 'X'].ravel()
+        # Delta_V[3*N : 3*N+3*K] = D['E', 'C'].ravel()
+        # Delta_V[3*N+3*K : -1] = D['E', 'Theta'].ravel()
+        # Delta_V[-1] = D['E', 'phi_x']
+
         if optimizer == 'SGD':
-            if X_mask != 'none':
-                if eps > 0.0: X, delta_X = sgd(X, D['E', 'X'], lr, ret_delta=True)
-                else: X = sgd(X, D['E', 'X'], lr, ret_delta=False)
+            if X_mask:
+                # if eps > 0.0: X, delta_X = sgd(X, D['E', 'X'], lr, ret_delta=True)
+                # else: X = sgd(X, D['E', 'X'], lr, ret_delta=False)
+                X = sgd(X, D['E', 'X'], lr)
             # if C_mask != 'none': C = sgd(C, D['E', 'C'], lr)
-            if eps > 0.0: C, delta_C = sgd(C, D['E', 'C'], lr, ret_delta=True)
-            else: C = sgd(C, D['E', 'C'], lr, ret_delta=False)
+            # if eps > 0.0: C, delta_C = sgd(C, D['E', 'C'], lr, ret_delta=True)
+            # else: C = sgd(C, D['E', 'C'], lr, ret_delta=False)
+            C = sgd(C, D['E', 'C'], lr)
             # if Theta_mask != 'none': Theta = sgd(Theta, D['E', 'Theta'], lr)
             Theta = sgd(Theta, D['E', 'Theta'], lr)
             if phi_x_mask: phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
+            # V = sgd(V, Delta_V, lr)
         elif optimizer == 'Adam':
-            if X_mask != 'none':
-                if eps > 0.0: X, s_X, r_X, delta_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
-                else: X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
+            if X_mask:
+                # if eps > 0.0: X, s_X, r_X, delta_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+                # else: X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
+                X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1, rho_1=0.9, rho_2=0.999)
             # if C_mask != 'none': C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
-            if eps > 0.0: C, s_C, r_C, delta_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
-            else: C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
+            # if eps > 0.0: C, s_C, r_C, delta_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=True)
+            # else: C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999, ret_delta=False)
+            C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1, rho_1=0.9, rho_2=0.999)
             # if Theta_mask != 'none': Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
             Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1, rho_1=0.9, rho_2=0.999)
             if phi_x_mask: phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1, rho_1=0.9, rho_2=0.999)
+            # V, s_V, r_V = gd_adam(V, Delta_V, lr, s_V, r_V, t=iters+1, rho_1=0.9, rho_2=0.999)
 
-        C[-1,:] = sphere_project(C[-1,:], C[0,:], 1.0)
+        # X = V[: 3*N].reshape(X.shape)
+        # C = V[3*N : 3*N+3*K].reshape(C.shape)
+        # Theta = V[3*N+3*K : -1].reshape(Theta.shape)
+        # phi_x = V[-1]
 
-    print(f'E_min = {E_min}')
-    if ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
-    else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
+        C[-1,:] = sphere_project(C[-1,:], C[0,:], R)
+
+    print(f'{E_min = }')
+    if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
+    else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
 
 def get_pixels(image):
     labeled_image, num_features = ndimage.label(image > 1e-1)
@@ -411,3 +441,122 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
             ax.text(*C[j,:], f'c{j}')
         # for i in range(X.shape[0]):
         #     ax.text(*X[i,:], f'{i}')
+
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H):
+    assert isinstance(j_slider, Slider)
+    ax0 = fig.add_subplot(1, 2, 1, projection='3d')
+    xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
+    xmax, ymax, zmax = np.row_stack((X.max(axis=0), C.max(axis=0))).max(axis=0)
+    ax0.set_xlim(xmin, xmax)
+    ax0.set_ylim(zmin, zmax)
+    ax0.set_zlim(-ymax, -ymin)
+    ax0.set_xlabel('x')
+    ax0.set_ylabel('z')
+    ax0.set_zlabel('-y')
+    ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
+
+    ax1 = fig.add_subplot(1, 2, 2)
+    ax1.set_xlim(0, W)
+    ax1.set_ylim(H, 0)
+    ax1.set_aspect('equal')
+
+    R = ryxz(Theta)
+    camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
+    camera_dir_rot = camera_dir @ R[j_slider.val].T
+    tan_phi_x_2 = np.tan(phi_x / 2)
+    r = W / H
+    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+    camera_corners_rot = camera_corners @ R[j_slider.valinit].T
+    # Поворот всей системы вокруг оси x на угол -pi/2
+    Ryz = np.array([[1, 0, 0],
+                    [0, 0, 1],
+                    [0, -1, 0]])
+    X_show = rotate_scene(X, Ryz)
+    C_show = rotate_scene(C, Ryz)
+    camera_dir_rot = rotate_scene(camera_dir_rot, Ryz)
+    camera_dir_rot = camera_dir_rot.ravel()
+    camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
+
+    X_model = transform(X, C, Theta, phi_x, W, r)
+    X_pix = np.floor(X_model)
+    I, J = np.where((X_pix[:,:,0] < 0) | (X_pix[:,:,0] >= W) | (X_pix[:,:,1] < 0) | (X_pix[:,:,1] >= H))
+    X_pix[I, J] = np.nan
+
+    X_visible = ~np.isnan(X_pix)[:,:,0]
+    I_visible = np.where(X_visible[:,j_slider.val] == True)[0]
+    ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
+    I_not_visible = np.where(X_visible[:,j_slider.val] == False)[0]
+    ax0.plot(*X_show[I_not_visible,:].T, marker='o', linestyle=' ', markersize=3, color='red', alpha=0.5)
+    ax0.plot(*C_show.T, color='blue')
+    ax0.plot(*C_show[j_slider.valinit,:], marker='o', linestyle=' ', markersize=4, color='blue')
+
+    f = 0.2
+    ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
+             linewidth=1.0, linestyle='--', color='blue')
+
+    camera_corner_list = [[0, 1], [1, 3], [3, 2], [2, 0]]
+    for camera_corner in camera_corners_rot:
+        ax0.plot(*np.vstack((C_show[j_slider.val,:],
+                             C_show[j_slider.val,:] + f * camera_corner)).T,
+                 linewidth=1.0, color='blue')
+    for corner in camera_corner_list:
+        ax0.plot(*np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[corner[0],:],
+                             C_show[j_slider.val,:] + f * camera_corners_rot[corner[1],:])).T,
+                 linewidth=1.0, color='blue')
+    verts = np.vstack(([C_show[j_slider.val,:] + f * camera_corners_rot[0,:]],
+                       [C_show[j_slider.val,:] + f * camera_corners_rot[1,:]],
+                       [C_show[j_slider.val,:] + f * camera_corners_rot[3,:]],
+                       [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
+    ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+
+    dist = distance(X, C, Theta)
+    points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=20/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
+
+
+    def update(val):
+        ax0.clear()
+        ax0.set_xlim(xmin, xmax)
+        ax0.set_ylim(zmin, zmax)
+        ax0.set_zlim(-ymax, -ymin)
+        ax0.set_xlabel('x')
+        ax0.set_ylabel('z')
+        ax0.set_zlabel('-y')
+
+        I_visible = np.where(X_visible[:,j_slider.val] == True)[0]
+        ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
+        I_not_visible = np.where(X_visible[:,j_slider.val] == False)[0]
+        ax0.plot(*X_show[I_not_visible,:].T, marker='o', linestyle=' ', markersize=3, color='red', alpha=0.5)
+        ax0.plot(*C_show.T, color='blue')
+        ax0.plot(*C_show[j_slider.val,:], marker='o', linestyle=' ', markersize=4, color='blue')
+        
+        camera_dir_rot = camera_dir @ R[j_slider.val].T
+        camera_dir_rot = rotate_scene(camera_dir_rot, Ryz)
+        camera_dir_rot = camera_dir_rot.ravel()
+        ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
+                 linewidth=1.0, linestyle='--', color='blue')
+
+        camera_corners_rot = camera_corners @ R[j_slider.val].T
+        camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
+        for camera_corner in camera_corners_rot:
+            ax0.plot(*np.vstack((C_show[j_slider.val,:],
+                                 C_show[j_slider.val,:] + f * camera_corner)).T,
+                     linewidth=1.0, color='blue')
+        for corner in camera_corner_list:
+            ax0.plot(*np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[corner[0],:],
+                                 C_show[j_slider.val,:] + f * camera_corners_rot[corner[1],:])).T,
+                     linewidth=1.0, color='blue')
+        verts = np.vstack(([C_show[j_slider.val,:] + f * camera_corners_rot[0,:]],
+                           [C_show[j_slider.val,:] + f * camera_corners_rot[1,:]],
+                           [C_show[j_slider.val,:] + f * camera_corners_rot[3,:]],
+                           [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
+        ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+
+
+        points.set_offsets(X_pix[I_visible, j_slider.val, :])
+        points.set_sizes(20/dist[I_visible, j_slider.val])
+        
+        
+    j_slider.on_changed(update)
