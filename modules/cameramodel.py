@@ -140,7 +140,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
     X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-    X_model = np.zeros_like(X_pix, dtype=np.float64)
+    X_model = np.zeros_like(X_pix_center)
 
     D = {}
     D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
@@ -162,7 +162,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E = np.zeros(max_iters)
     E_min = np.inf
 
-    r = np.linalg.norm(C[0,:] - C[-1,:])
+    R_scale = np.linalg.norm(C[0,:] - C[-1,:])
 
     # V = np.zeros(3 * N + 6 * K + 1)
     # V[: 3*N] = X.ravel()
@@ -217,7 +217,9 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             #     print('Almost zero changes')
             #     break
             # if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
-        if optimizer == 'SGD' and E[iters] < 1.0: print(f"{iters} : Turn to Adam"); optimizer = 'Adam'
+        if optimizer == 'SGD' and E[iters] < 1.0:
+            print(f"{iters} : Turn to Adam")
+            optimizer = 'Adam'
 
         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
         D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
@@ -300,7 +302,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # Theta = V[3*N+3*K : -1].reshape(Theta.shape)
         # phi_x = V[-1]
 
-        C[-1,:] = sphere_project(C[-1,:], C[0,:], r)
+        C[-1,:] = sphere_project(C[-1,:], C[0,:], R_scale)
 
     print(f'{E_min = }')
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
@@ -590,6 +592,30 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
     if not ret_A: return F
     else: F, A
 
+def get_theta(R):
+    if (np.abs(R @ R.T - np.eye(3)) > 1e-4).any():
+        raise ValueError(f"Expected R to be normal (R @ R.T must be approximately equal to eye(3))")
+    if np.abs(np.linalg.det(R) - 1.0) > 1e-4:
+        raise ValueError(f"Expected R to have determinant approximately 1.0")
+
+    for l in range(2):
+        if l == 0:
+            c_x, s_x = np.sqrt(R[1,0]**2 + R[1,1]**2), - R[1,2]
+        if l == 1:
+            c_x, s_x = - np.sqrt(R[1,0]**2 + R[1,1]**2), - R[1,2]
+        c_y, s_y = R[[2,0],2] / c_x
+        c_z, s_z = R[1,[1,0]] / c_x
+        theta_x = np.arctan2(s_x, c_x)
+        theta_y = np.arctan2(s_y, c_y)
+        theta_z = np.arctan2(s_z, c_z)
+        theta = np.array([theta_x, theta_y, theta_z])
+
+        if np.linalg.norm(R - ryxz(theta.reshape(1, -1))[0]) <= 1e-10:
+            if l == 1: print('Helped')
+            break
+    
+    return theta
+
 def get_scene_from_F(X_pix, F, W, H, phi_x):
     if X_pix.shape[1] != 2:
         raise ValueError(f"Expected X_pix to have shape[1] = 2")
@@ -602,44 +628,107 @@ def get_scene_from_F(X_pix, F, W, H, phi_x):
                    [0.0, alpha_y, p_y],
                    [0.0, 0.0, 1]])
     
-    P1 = K_ @ np.column_stack((np.eye(3), np.zeros(3)))
+    # P1 = K_ @ np.column_stack((np.eye(3), np.zeros(3)))
+    P1 = np.column_stack((K_, np.zeros(3)))
     E = K_.T @ F @ K_
     U, d, Vh = np.linalg.svd(E)
 
     W_ = np.array([[0, -1, 0],
                    [1, 0, 0],
                    [0, 0, 1]])
-    R = U @ W_.T @ Vh
-    t = U[:,-1]
-
-    P2 = K_ @ np.column_stack((R, t))
-
-    X = np.zeros((X_pix_center.shape[0], 3))
-    for i in range(X.shape[0]):
-        x1, y1 = X_pix_center[i,0,:]
-        x2, y2 = X_pix_center[i,1,:]
-        A = np.vstack((x1 * P1[2] - P1[0],
-                       y1 * P1[2] - P1[1],
-                       x2 * P2[2] - P2[0],
-                       y2 * P2[2] - P2[1]))
-        U2, d2, Vh2 = np.linalg.svd(A)
-        x = Vh2[-1]
-        x = x / x[-1]
-        X[i] = x[:-1]
     
-    RT = R.T
-    C = np.vstack((np.zeros(3), - RT @ t))
+    k_values = []
+    for k in range(4):
+        if k == 0: 
+            R = U @ W_ @ Vh
+            t = U[:,-1]
+        elif k == 1:
+            R = U @ W_ @ Vh
+            t = - U[:,-1]
+        elif k == 2:
+            R = U @ W_.T @ Vh
+            t = U[:,-1]
+        elif k == 3:
+            R = U @ W_.T @ Vh
+            t = - U[:,-1]
+        
+        # непонятная ситуация
+        if np.linalg.det(R) < 0:
+            print('Weird')
+            R = - R
 
-    c_x, s_x = np.sqrt(RT[1,0]**2 + RT[1,1]**2), - RT[1,2]
-    c_y, s_y = RT[2,2] / c_x, RT[0,2] / c_x
-    c_z, s_z = RT[1,1] / c_x, RT[1,0] / c_x
-    theta_x = np.arctan2(s_x, c_x)
-    theta_y = np.arctan2(s_y, c_y)
-    theta_z = np.arctan2(s_z, c_z)
-    Theta = np.array([[0.0, 0.0, 0.0],
-                      [theta_x, theta_y, theta_z]])
+        P2 = K_ @ np.column_stack((R, t))
+
+        X = np.zeros((X_pix_center.shape[0], 3))
+        for i in range(X.shape[0]):
+            x1, y1 = X_pix_center[i,0,:]
+            x2, y2 = X_pix_center[i,1,:]
+            A = np.vstack((x1 * P1[2] - P1[0],
+                           y1 * P1[2] - P1[1],
+                           x2 * P2[2] - P2[0],
+                           y2 * P2[2] - P2[1]))
+            U2, d2, Vh2 = np.linalg.svd(A)
+            x = Vh2[-1]
+            x = x / x[-1]
+            X[i] = x[:-1]
+        
+        RT = R.T
+        C = np.vstack((np.zeros(3), - RT @ t))
+
+        theta = get_theta(RT)
+        Theta = np.row_stack((np.zeros(3), theta))
+        
+        # if (distance(X, C, Theta) <= 0).any():
+        #     print(f'Weird, {k = }, {distance(X, C, Theta) = }')
+        if (distance(X, C, Theta) > 0).all():
+            k_values.append(k)
+            # break
+
+    if len(k_values) != 1:
+        print(f'IDK, {k_values = }')
+    else:
+        print(f'Yay, {k_values = }')
+        k = k_values[0]
+        if k == 0: 
+            R = U @ W_ @ Vh
+            t = U[:,-1]
+        elif k == 1:
+            R = U @ W_ @ Vh
+            t = - U[:,-1]
+        elif k == 2:
+            R = U @ W_.T @ Vh
+            t = U[:,-1]
+        elif k == 3:
+            R = U @ W_.T @ Vh
+            t = - U[:,-1]
+        
+        # непонятная ситуация
+        if np.linalg.det(R) < 0: R = - R
+
+        P2 = K_ @ np.column_stack((R, t))
+
+        X = np.zeros((X_pix_center.shape[0], 3))
+        for i in range(X.shape[0]):
+            x1, y1 = X_pix_center[i,0,:]
+            x2, y2 = X_pix_center[i,1,:]
+            A = np.vstack((x1 * P1[2] - P1[0],
+                           y1 * P1[2] - P1[1],
+                           x2 * P2[2] - P2[0],
+                           y2 * P2[2] - P2[1]))
+            U2, d2, Vh2 = np.linalg.svd(A)
+            x = Vh2[-1]
+            x = x / x[-1]
+            X[i] = x[:-1]
+        
+        RT = R.T
+        C = np.vstack((np.zeros(3), - RT @ t))
+
+        theta = get_theta(RT)
+        Theta = np.row_stack((np.zeros(3), theta))
     
     if np.linalg.norm(RT - ryxz(Theta)[1]) > 1e-10:
-        print('OH NO')
+            print(f'OH NO, {np.linalg.norm(RT - ryxz(Theta)[1]) = }')
+            print(f'{ryxz(Theta)[1] = }')
+            print(f'{RT = }')
     
     return X, C, Theta
