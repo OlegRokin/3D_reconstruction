@@ -134,7 +134,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2):
     return x - lr * s_corr / (1e-8 + np.sqrt(r_corr)), s_new, r_new
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-        X_mask=True, phi_x_mask=True,
+        X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
         optimizer='SGD', patience=2000, factor=2, print_step=1000, ret_arrays=False):
     X_pix_center = X_pix + 0.5
     N, K = X_pix.shape[:2]
@@ -162,7 +162,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E = np.zeros(max_iters)
     E_min = np.inf
 
-    R_scale = np.linalg.norm(C[0,:] - C[-1,:])
+    R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
     # V = np.zeros(3 * N + 6 * K + 1)
     # V[: 3*N] = X.ravel()
@@ -252,13 +252,13 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X']) * C_mask
         D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
         # D['E', 'C'][0,:] = D['E', 'C'][-1,:] = 0.0
-        D['E', 'C'][0,:] = 0.0
+        D['E', 'C'][main_indexes[0],:] = 0.0
 
         # if Theta_mask == 'default': D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
         # elif Theta_mask != 'none': D['E', 'Theta'] = D['E', 'Theta'] * Theta_mask
         # D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta']) * Theta_mask
         D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
-        D['E', 'Theta'][0,:] = 0.0
+        D['E', 'Theta'][main_indexes[0],:] = 0.0
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - beta / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
@@ -302,7 +302,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         # Theta = V[3*N+3*K : -1].reshape(Theta.shape)
         # phi_x = V[-1]
 
-        C[-1,:] = sphere_project(C[-1,:], C[0,:], R_scale)
+        C[main_indexes[1],:] = sphere_project(C[main_indexes[1],:], C[main_indexes[0],:], R_scale)
 
     print(f'{E_min = }')
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
@@ -444,7 +444,7 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
         # for i in range(X.shape[0]):
         #     ax.text(*X[i,:], f'{i}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20):
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0.2):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
@@ -495,7 +495,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20):
     ax0.plot(*C_show.T, color='blue')
     ax0.plot(*C_show[j_slider.valinit,:], marker='o', linestyle=' ', markersize=4, color='blue')
 
-    f = 0.2
     ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
              linewidth=1.0, linestyle='--', color='blue')
 
@@ -514,7 +513,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20):
                        [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
     ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
 
-    dist = distance(X, C, Theta)
+    dist = np.abs(distance(X, C, Theta))
     points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=dist_scale/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
 
 
@@ -565,9 +564,9 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20):
 
 def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
     if X_pix.shape[0] < 8:
-        raise ValueError(f"Expected X_pix to have shape[0] >= 8")
+        raise ValueError(f"Expected X_pix to have shape[0]>=8")
     if X_pix.shape[1] != 2:
-        raise ValueError(f"Expected X_pix to have shape[1] = 2")
+        raise ValueError(f"Expected X_pix to have shape[1]=2")
 
     X_pix_center = X_pix + 0.5
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
@@ -616,9 +615,9 @@ def get_theta(R):
     
     return theta
 
-def get_scene_from_F(X_pix, F, W, H, phi_x):
+def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     if X_pix.shape[1] != 2:
-        raise ValueError(f"Expected X_pix to have shape[1] = 2")
+        raise ValueError(f"Expected X_pix to have shape[1]=2")
     
     X_pix_center = X_pix + 0.5
 
@@ -654,7 +653,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x):
         
         # непонятная ситуация
         if np.linalg.det(R) < 0:
-            print('Weird')
+            # print('Weird')
             R = - R
 
         P2 = K_ @ np.column_stack((R, t))
@@ -731,4 +730,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x):
             print(f'{ryxz(Theta)[1] = }')
             print(f'{RT = }')
     
-    return X, C, Theta
+    if not ret_status: return X, C, Theta
+    else:
+        if k_values == 1: return X, C, Theta, True
+        else: return X, C, Theta, False
