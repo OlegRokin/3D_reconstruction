@@ -732,5 +732,5 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     
     if not ret_status: return X, C, Theta
     else:
-        if k_values == 1: return X, C, Theta, True
+        if len(k_values) == 1: return X, C, Theta, True
         else: return X, C, Theta, False
