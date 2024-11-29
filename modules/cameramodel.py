@@ -452,10 +452,12 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax0.set_xlim(xmin, xmax)
     ax0.set_ylim(zmin, zmax)
     ax0.set_zlim(-ymax, -ymin)
+    ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
+    ax0.set_zticklabels(ax0.get_zticks()[::-1])
+    ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
     ax0.set_xlabel('x')
     ax0.set_ylabel('z')
-    ax0.set_zlabel('-y')
-    ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
+    ax0.set_zlabel('y')
 
     ax1 = fig.add_subplot(1, 2, 2)
     ax1.set_xlim(0, W)
@@ -522,9 +524,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         ax0.set_xlim(xmin, xmax)
         ax0.set_ylim(zmin, zmax)
         ax0.set_zlim(-ymax, -ymin)
+        ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
+        ax0.set_zticklabels(ax0.get_zticks()[::-1])
         ax0.set_xlabel('x')
         ax0.set_ylabel('z')
-        ax0.set_zlabel('-y')
+        ax0.set_zlabel('y')
 
         I_visible = np.where(X_visible[:,j_slider.val] == True)[0]
         ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
@@ -684,9 +688,11 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
             # break
 
     if len(k_values) != 1:
-        print(f'IDK, {k_values = }')
+        status = False
+        # print(f'IDK, {k_values = }')
     else:
-        print(f'Yay, {k_values = }')
+        status = True
+        # print(f'Yay, {k_values = }')
         k = k_values[0]
         if k == 0: 
             R = U @ W_ @ Vh
@@ -731,6 +737,4 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
             print(f'{RT = }')
     
     if not ret_status: return X, C, Theta
-    else:
-        if len(k_values) == 1: return X, C, Theta, True
-        else: return X, C, Theta, False
+    else: return X, C, Theta, status
