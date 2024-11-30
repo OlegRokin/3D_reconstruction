@@ -82,6 +82,7 @@ def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
 
 def transform(X, C, Theta, phi_x, W, r):
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
     return X_model
 
@@ -515,7 +516,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
                        [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
     ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
 
-    dist = np.abs(distance(X, C, Theta))
+    dist = distance(X, C, Theta)
     points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=dist_scale/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
 
 
