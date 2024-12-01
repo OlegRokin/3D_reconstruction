@@ -444,7 +444,7 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
             ax.text(*C[j,:], f'c{j}')
 
 def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0.2,
-                     axis_off=False, grid_off=False, show_traces=False):
+                     axis_off=False, grid_off=False, show_traces=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
@@ -460,11 +460,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax0.set_zlabel('y')
     if axis_off: ax0.set_axis_off()
     if grid_off: ax0.grid(False)
-
-    ax1 = fig.add_subplot(1, 2, 2)
-    ax1.set_xlim(0, W)
-    ax1.set_ylim(H, 0)
-    ax1.set_aspect('equal')
 
     R = ryxz(Theta)
     camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
@@ -523,6 +518,13 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
                        [C_show[j_slider.val,:] + f * camera_corners_rot[3,:]],
                        [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
     ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+
+    ax1 = fig.add_subplot(1, 2, 2)
+    ax1.set_xlim(0, W)
+    ax1.set_ylim(H, 0)
+    ax1.set_aspect('equal')
+    ax1.set_xticks(np.linspace(0, W, 5))
+    ax1.set_yticks(np.linspace(H, 0, 5))
 
     dist = distance(X, C, Theta)
     points = ax1.scatter(*X_pix[I_visible, j_slider.val, :].T, s=dist_scale/dist[I_visible, j_slider.val], marker='o', color='red', zorder=10)
@@ -583,6 +585,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         
         
     j_slider.on_changed(update)
+
+    if ret_axis: return ax0, ax1
 
 def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
     if X_pix.shape[0] < 8:
