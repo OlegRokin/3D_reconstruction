@@ -402,7 +402,7 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
     if show_traces:
         for j in range(C.shape[0]):
             ax.add_collection(Line3DCollection([[X[i], C[j]] for i in range(X.shape[0])],
-                                            linewidth=0.5, colors='red'))
+                                               linewidth=0.5, colors='red'))
 
     if object_corner_list:
         for corner in object_corner_list:
@@ -442,10 +442,9 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
             ax.text(*X[i,:], f'x{i}')
         for j in range(C.shape[0]):
             ax.text(*C[j,:], f'c{j}')
-        # for i in range(X.shape[0]):
-        #     ax.text(*X[i,:], f'{i}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0.2):
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0.2,
+                     axis_off=False, grid_off=False, show_traces=False):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
@@ -459,6 +458,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax0.set_xlabel('x')
     ax0.set_ylabel('z')
     ax0.set_zlabel('y')
+    if axis_off: ax0.set_axis_off()
+    if grid_off: ax0.grid(False)
 
     ax1 = fig.add_subplot(1, 2, 2)
     ax1.set_xlim(0, W)
@@ -498,6 +499,13 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax0.plot(*C_show.T, color='blue')
     ax0.plot(*C_show[j_slider.valinit,:], marker='o', linestyle=' ', markersize=4, color='blue')
 
+    if show_traces:
+        X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)
+        X_proj_show = rotate_scene(X_proj, Ryz)[:,0,:]
+        ax0.add_collection(Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
+                                            linewidth=0.5, colors='red', alpha=0.5))
+        ax0.plot(*X_proj_show.T, marker='o', linestyle=' ', markersize=1.5, color='red', alpha=0.5)
+
     ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
              linewidth=1.0, linestyle='--', color='blue')
 
@@ -530,6 +538,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         ax0.set_xlabel('x')
         ax0.set_ylabel('z')
         ax0.set_zlabel('y')
+        if axis_off: ax0.set_axis_off()
+        if grid_off: ax0.grid(False)
 
         I_visible = np.where(X_visible[:,j_slider.val] == True)[0]
         ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
@@ -538,6 +548,13 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         ax0.plot(*C_show.T, color='blue')
         ax0.plot(*C_show[j_slider.val,:], marker='o', linestyle=' ', markersize=4, color='blue')
         
+        if show_traces:
+            X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)
+            X_proj_show = rotate_scene(X_proj, Ryz)[:,0,:]
+            ax0.add_collection(Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
+                                                linewidth=0.5, colors='red', alpha=0.5))
+            ax0.plot(*X_proj_show.T, marker='o', linestyle=' ', markersize=1.5, color='red', alpha=0.5)
+
         camera_dir_rot = camera_dir @ R[j_slider.val].T
         camera_dir_rot = rotate_scene(camera_dir_rot, Ryz)
         camera_dir_rot = camera_dir_rot.ravel()
