@@ -7,11 +7,13 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from matplotlib.widgets import Slider
 
 def error(X_pix, X_model):
-    N, K = X_pix.shape[:2]
+    X_visible = ~np.isnan(X_pix)[:,:,0]
+    # N_array = X_visible.astype(np.int32).sum(axis=0)
+    # N, K = X_pix.shape[:2]
     X_pix_center = X_pix + 0.5
-    # X_diff = X_model - X_pix_center
     X_diff = np.nan_to_num(X_model - X_pix_center)
-    return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K) 
+    # return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)
+    return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * X_visible.sum())
 
 def rx(theta):
     cos_theta, sin_theta = np.cos(theta), np.sin(theta)
@@ -137,6 +139,8 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2):
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
         optimizer='SGD', patience=2000, factor=2, print_step=1000, ret_arrays=False):
+    X_visible = ~np.isnan(X_pix)[:,:,0]
+    NK_nan = X_visible.sum()
     X_pix_center = X_pix + 0.5
     N, K = X_pix.shape[:2]
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
@@ -195,7 +199,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         # X_diff = X_model - X_pix_center
         X_diff = np.nan_to_num(X_model - X_pix_center)
-        E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * N * K)
+        # E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * N * K)
+        E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f"{iters} : {E[iters]}")
         # if iters % print_step == 0: print(f"{iters} : {E[iters]}, {np.max(np.abs(np.sum(Delta_X, axis=0))) = }, {np.max(np.abs(np.sum(Delta_C, axis=0))) = }")
         # if iters % print_step == 0: print(f"{iters} : {E[iters]}, {np.max(np.abs(delta_X)) = }, {np.max(np.abs(delta_C)) = }")
@@ -235,7 +240,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         D['X_model', 'X'] = np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
 
-        D['E', 'X_model'] = X_diff / (N * K)
+        # D['E', 'X_model'] = X_diff / (N * K)
+        D['E', 'X_model'] = X_diff / NK_nan
 
         if X_mask:
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
