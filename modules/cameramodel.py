@@ -468,8 +468,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     r = W / H
     camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
                                [- tan_phi_x_2, tan_phi_x_2 / r, 1],
-                               [tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                               [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners_rot = camera_corners @ R[j_slider.valinit].T
     # Поворот всей системы вокруг оси x на угол -pi/2
     Ryz = np.array([[1, 0, 0],
@@ -504,20 +504,15 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
              linewidth=1.0, linestyle='--', color='blue')
 
-    camera_corner_list = [[0, 1], [1, 3], [3, 2], [2, 0]]
-    for camera_corner in camera_corners_rot:
-        ax0.plot(*np.vstack((C_show[j_slider.val,:],
-                             C_show[j_slider.val,:] + f * camera_corner)).T,
-                 linewidth=1.0, color='blue')
-    for corner in camera_corner_list:
-        ax0.plot(*np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[corner[0],:],
-                             C_show[j_slider.val,:] + f * camera_corners_rot[corner[1],:])).T,
-                 linewidth=1.0, color='blue')
-    verts = np.vstack(([C_show[j_slider.val,:] + f * camera_corners_rot[0,:]],
-                       [C_show[j_slider.val,:] + f * camera_corners_rot[1,:]],
-                       [C_show[j_slider.val,:] + f * camera_corners_rot[3,:]],
-                       [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
-    ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+    ax0.add_collection(Line3DCollection(np.stack((np.tile(C_show[j_slider.val,:], (4, 1)),
+                                                  C_show[j_slider.val,:] + f * camera_corners_rot), axis=1),
+                                        linewidth=1.0, colors='blue'))
+    ax0.add_collection(Line3DCollection(np.stack([np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[i,:],
+                                                             C_show[j_slider.val,:] + f * camera_corners_rot[(i+1)%4,:]))
+                                                  for i in range(4)], axis=1),
+                                        linewidth=1.0, colors='blue'))
+    ax0.add_collection3d(Poly3DCollection([C_show[j_slider.val,:] + f * camera_corners_rot], facecolor='blue', alpha=0.25))
+
 
     ax1 = fig.add_subplot(1, 2, 2)
     ax1.set_xlim(0, W)
@@ -565,19 +560,14 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
 
         camera_corners_rot = camera_corners @ R[j_slider.val].T
         camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
-        for camera_corner in camera_corners_rot:
-            ax0.plot(*np.vstack((C_show[j_slider.val,:],
-                                 C_show[j_slider.val,:] + f * camera_corner)).T,
-                     linewidth=1.0, color='blue')
-        for corner in camera_corner_list:
-            ax0.plot(*np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[corner[0],:],
-                                 C_show[j_slider.val,:] + f * camera_corners_rot[corner[1],:])).T,
-                     linewidth=1.0, color='blue')
-        verts = np.vstack(([C_show[j_slider.val,:] + f * camera_corners_rot[0,:]],
-                           [C_show[j_slider.val,:] + f * camera_corners_rot[1,:]],
-                           [C_show[j_slider.val,:] + f * camera_corners_rot[3,:]],
-                           [C_show[j_slider.val,:] + f * camera_corners_rot[2,:]]))
-        ax0.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+        ax0.add_collection(Line3DCollection(np.stack((np.tile(C_show[j_slider.val,:], (4, 1)),
+                                                     C_show[j_slider.val,:] + f * camera_corners_rot), axis=1),
+                                            linewidth=1.0, colors='blue'))
+        ax0.add_collection(Line3DCollection(np.stack([np.vstack((C_show[j_slider.val,:] + f * camera_corners_rot[i,:],
+                                                                 C_show[j_slider.val,:] + f * camera_corners_rot[(i+1)%4,:]))
+                                                      for i in range(4)], axis=1),
+                                            linewidth=1.0, colors='blue'))
+        ax0.add_collection3d(Poly3DCollection([C_show[j_slider.val,:] + f * camera_corners_rot], facecolor='blue', alpha=0.25))
 
 
         points.set_offsets(X_pix[I_visible, j_slider.val, :])
