@@ -8,11 +8,8 @@ from matplotlib.widgets import Slider
 
 def error(X_pix, X_model):
     X_visible = ~np.isnan(X_pix)[:,:,0]
-    # N_array = X_visible.astype(np.int32).sum(axis=0)
-    # N, K = X_pix.shape[:2]
     X_pix_center = X_pix + 0.5
     X_diff = np.nan_to_num(X_model - X_pix_center)
-    # return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * N * K)
     return np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * X_visible.sum())
 
 def rx(theta):
@@ -114,26 +111,14 @@ def find_dots(X_pix, W, r, C, Theta, phi_x):
 def sphere_project(x, o, R):
     return o + R * (x - o) / np.linalg.norm(x - o)
 
-# def sgd(x, grad_x, lr, ret_delta=False):
-    # delta_x = - lr * grad_x
-    # # if ~ret_delta: return x + delta_x
-    # # else: return x + delta_x, delta_x
-    # if ret_delta: return x + delta_x, delta_x
-    # else: return x + delta_x
 def sgd(x, grad_x, lr):
     return x - lr * grad_x
 
-# def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2, ret_delta=False):
 def gd_adam(x, grad_x, lr, s, r, t, rho_1, rho_2):
     s_new = rho_1 * s + (1 - rho_1) * grad_x
     r_new = rho_2 * r + (1 - rho_2) * grad_x**2
     s_corr = s_new / (1 - rho_1**t)
     r_corr = r_new / (1 - rho_2**t)
-    # delta_x = - lr * s_corr / (1e-8 + np.sqrt(r_corr))
-    # # if ~ret_delta: return x + delta_x, s_new, r_new
-    # # else: return x + delta_x, s_new, r_new, delta_x
-    # if ret_delta: return x + delta_x, s_new, r_new, delta_x
-    # else: return x + delta_x, s_new, r_new
     return x - lr * s_corr / (1e-8 + np.sqrt(r_corr)), s_new, r_new
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
@@ -643,13 +628,12 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     
     X_pix_center = X_pix + 0.5
 
-    alpha_x = alpha_y = W / (2 * np.tan(phi_x / 2))
+    f = W / (2 * np.tan(phi_x / 2))
     p_x, p_y = W / 2, H / 2
-    K_ = np.array([[alpha_x, 0.0, p_x],
-                   [0.0, alpha_y, p_y],
+    K_ = np.array([[f, 0.0, p_x],
+                   [0.0, f, p_y],
                    [0.0, 0.0, 1]])
-    
-    # P1 = K_ @ np.column_stack((np.eye(3), np.zeros(3)))
+
     P1 = np.column_stack((K_, np.zeros(3)))
     E = K_.T @ F @ K_
     U, d, Vh = np.linalg.svd(E)
