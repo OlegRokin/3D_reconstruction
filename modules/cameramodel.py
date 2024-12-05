@@ -438,8 +438,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
                      axis_off=False, grid_off=False, show_traces=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
-    xmin, ymin, zmin = np.row_stack((X.min(axis=0), C.min(axis=0))).min(axis=0)
-    xmax, ymax, zmax = np.row_stack((X.max(axis=0), C.max(axis=0))).max(axis=0)
+    xmin, ymin, zmin = np.vstack((X.min(axis=0), C.min(axis=0))).min(axis=0)
+    xmax, ymax, zmax = np.vstack((X.max(axis=0), C.max(axis=0))).max(axis=0)
     ax0.set_xlim(xmin, xmax)
     ax0.set_ylim(zmin, zmax)
     ax0.set_zlim(-ymax, -ymin)
@@ -606,9 +606,10 @@ def get_theta(R):
 
     for l in range(2):
         if l == 0:
-            c_x, s_x = np.sqrt(R[1,0]**2 + R[1,1]**2), - R[1,2]
+            c_x = np.sqrt(R[1,0]**2 + R[1,1]**2)
         if l == 1:
-            c_x, s_x = - np.sqrt(R[1,0]**2 + R[1,1]**2), - R[1,2]
+            c_x = - np.sqrt(R[1,0]**2 + R[1,1]**2)
+        s_x = - R[1,2]
         c_y, s_y = R[[2,0],2] / c_x
         c_z, s_z = R[1,[1,0]] / c_x
         theta_x = np.arctan2(s_x, c_x)
@@ -617,8 +618,9 @@ def get_theta(R):
         theta = np.array([theta_x, theta_y, theta_z])
 
         if np.linalg.norm(R - ryxz(theta.reshape(1, -1))[0]) <= 1e-10:
-            if l == 1: print('Helped')
             break
+        else:
+            print('Weird in get_theta')
     
     return theta
 
@@ -642,7 +644,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
                    [1, 0, 0],
                    [0, 0, 1]])
     
-    k_values = []
+    status = False
     for k in range(4):
         if k == 0: 
             R = U @ W_ @ Vh
@@ -657,59 +659,6 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
             R = U @ W_.T @ Vh
             t = - U[:,-1]
         
-        # непонятная ситуация
-        if np.linalg.det(R) < 0:
-            # print('Weird')
-            R = - R
-
-        P2 = K_ @ np.column_stack((R, t))
-
-        X = np.zeros((X_pix_center.shape[0], 3))
-        for i in range(X.shape[0]):
-            x1, y1 = X_pix_center[i,0,:]
-            x2, y2 = X_pix_center[i,1,:]
-            A = np.vstack((x1 * P1[2] - P1[0],
-                           y1 * P1[2] - P1[1],
-                           x2 * P2[2] - P2[0],
-                           y2 * P2[2] - P2[1]))
-            U2, d2, Vh2 = np.linalg.svd(A)
-            x = Vh2[-1]
-            x = x / x[-1]
-            X[i] = x[:-1]
-        
-        RT = R.T
-        C = np.vstack((np.zeros(3), - RT @ t))
-
-        theta = get_theta(RT)
-        Theta = np.row_stack((np.zeros(3), theta))
-        
-        # if (distance(X, C, Theta) <= 0).any():
-        #     print(f'Weird, {k = }, {distance(X, C, Theta) = }')
-        if (distance(X, C, Theta) > 0).all():
-            k_values.append(k)
-            # break
-
-    if len(k_values) != 1:
-        status = False
-        # print(f'IDK, {k_values = }')
-    else:
-        status = True
-        # print(f'Yay, {k_values = }')
-        k = k_values[0]
-        if k == 0: 
-            R = U @ W_ @ Vh
-            t = U[:,-1]
-        elif k == 1:
-            R = U @ W_ @ Vh
-            t = - U[:,-1]
-        elif k == 2:
-            R = U @ W_.T @ Vh
-            t = U[:,-1]
-        elif k == 3:
-            R = U @ W_.T @ Vh
-            t = - U[:,-1]
-        
-        # непонятная ситуация
         if np.linalg.det(R) < 0: R = - R
 
         P2 = K_ @ np.column_stack((R, t))
@@ -724,19 +673,16 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
                            y2 * P2[2] - P2[1]))
             U2, d2, Vh2 = np.linalg.svd(A)
             x = Vh2[-1]
-            x = x / x[-1]
-            X[i] = x[:-1]
+            X[i] = x[:-1] / x[-1]
         
-        RT = R.T
-        C = np.vstack((np.zeros(3), - RT @ t))
+        C = np.vstack((np.zeros(3), - R.T @ t))
 
-        theta = get_theta(RT)
-        Theta = np.row_stack((np.zeros(3), theta))
-    
-    if np.linalg.norm(RT - ryxz(Theta)[1]) > 1e-10:
-            print(f'OH NO, {np.linalg.norm(RT - ryxz(Theta)[1]) = }')
-            print(f'{ryxz(Theta)[1] = }')
-            print(f'{RT = }')
+        theta = get_theta(R.T)
+        Theta = np.vstack((np.zeros(3), theta))
+
+        if (distance(X, C, Theta) > 0).all():
+            status = True
+            break
     
     if not ret_status: return X, C, Theta
     else: return X, C, Theta, status
