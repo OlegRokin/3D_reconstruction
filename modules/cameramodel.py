@@ -79,9 +79,9 @@ def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
     if dir_only: return X_proj
     else: return X_proj + C[np.newaxis,:,:]
 
-def transform(X, C, Theta, phi_x, W, r):
+def transform(X, C, Theta, phi_x, W, r, delete_back_points=True):
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
-    X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
+    if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
     return X_model
 
@@ -123,7 +123,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
-        optimizer='SGD', patience=2000, factor=2, print_step=1000, ret_arrays=False):
+        optimizer='Adam', stop_at_mean=False, patience=2000, factor=2, print_step=1000, ret_arrays=False):
     X_visible = ~np.isnan(X_pix)[:,:,0]
     NK_nan = X_visible.sum()
     X_pix_center = X_pix + 0.5
@@ -138,7 +138,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
     if not phi_x_mask:
         tan_phi_x_2 = np.tan(phi_x / 2)
-        beta = W / 2 / tan_phi_x_2
+        f = W / 2 / tan_phi_x_2
 
     s_X = r_X = np.zeros_like(X)
     s_C = r_C = np.zeros_like(C)
@@ -148,6 +148,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     iters = 0
     E = np.zeros(max_iters)
     E_min = np.inf
+    timer = 0
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
@@ -169,21 +170,27 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if phi_x_mask:
             tan_phi_x_2 = np.tan(phi_x / 2)
-            beta = W / 2 / tan_phi_x_2
+            f = W / 2 / tan_phi_x_2
         X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
 
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f"{iters} : {E[iters]}")
         if iters >= 1:
+            if timer > 0:
+                timer -= 1
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
             if iters >= patience:
-                if E[iters] >= E[iters - patience]:
+                if timer <= 0 and E[iters] >= E[iters - patience]:
                     print(f"{iters} : Decrease LR to {lr / factor}")
                     lr /= factor
-                    if lr == 0.0 or E[iters] - E[iters - patience] == 0.0: break
+                    timer = patience
+                    if lr == 0.0 or E[iters] - E[iters - patience] == 0.0:
+                        break
+        if stop_at_mean and E[iters] < 1 / 12:
+            break
         if optimizer == 'SGD' and E[iters] < 1.0:
             print(f"{iters} : Turn to Adam")
             optimizer = 'Adam'
@@ -193,8 +200,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
         D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
 
-        D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = beta / X_rot[:,:,2]
-        D['X_model', 'X_rot'][:,:,:,2] = - beta / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
+        D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = f / X_rot[:,:,2]
+        D['X_model', 'X_rot'][:,:,:,2] = - f / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
 
         D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
 
@@ -212,7 +219,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         D['E', 'Theta'][main_indexes[0],:] = 0.0
 
         if phi_x_mask:
-            D['X_model', 'phi_x'] = - beta / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
+            D['X_model', 'phi_x'] = - f / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
             D['E', 'phi_x'] = np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
 
         if optimizer == 'SGD':
@@ -226,7 +233,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1)
             C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1)
             Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1)
-            if phi_x_mask: phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1)
+            if phi_x_mask:
+                phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1)
 
         C[main_indexes[1],:] = sphere_project(C[main_indexes[1],:], C[main_indexes[0],:], R_scale)
 
@@ -493,7 +501,7 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
         F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
 
     if not ret_A: return F
-    else: F, A
+    else: return F, A
 
 def get_theta(R):
     if (np.abs(R @ R.T - np.eye(3)) > 1e-4).any():
