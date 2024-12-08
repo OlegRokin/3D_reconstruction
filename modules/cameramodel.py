@@ -79,10 +79,13 @@ def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
     if dir_only: return X_proj
     else: return X_proj + C[np.newaxis,:,:]
 
-def transform(X, C, Theta, phi_x, W, r, delete_back_points=True):
+def transform(X, C, Theta, phi_x, W, r, delete_back_points=True, delete_boundaries_points=False):
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
     if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
+    if delete_boundaries_points:
+        I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= W / r))
+        X_model[I, J] = np.nan
     return X_model
 
 def distance(X, C, Theta):
@@ -177,9 +180,9 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f"{iters} : {E[iters]}")
-        if patinece_timer > 0:
-            patinece_timer -= 1
         if iters >= 1:
+            if patinece_timer > 0:
+                patinece_timer -= 1
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
