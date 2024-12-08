@@ -123,7 +123,8 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
-        optimizer='Adam', stop_at_mean=False, patience=2000, factor=2, print_step=1000, ret_arrays=False):
+        optimizer='Adam', stop_at_mean=False, patience=2000, factor=2.0,
+        stop_diff=0.0, print_step=1000, ret_arrays=False):
     X_visible = ~np.isnan(X_pix)[:,:,0]
     NK_nan = X_visible.sum()
     X_pix_center = X_pix + 0.5
@@ -148,7 +149,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     iters = 0
     E = np.zeros(max_iters)
     E_min = np.inf
-    timer = 0
+    patinece_timer = patience
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
@@ -176,19 +177,18 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f"{iters} : {E[iters]}")
+        if patinece_timer > 0:
+            patinece_timer -= 1
         if iters >= 1:
-            if timer > 0:
-                timer -= 1
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-            if iters >= patience:
-                if timer <= 0 and E[iters] >= E[iters - patience]:
-                    print(f"{iters} : Decrease LR to {lr / factor}")
-                    lr /= factor
-                    timer = patience
-                    if lr == 0.0 or E[iters] - E[iters - patience] == 0.0:
-                        break
+            if patinece_timer <= 0 and E[iters] >= E[iters - patience]:
+                print(f"{iters} : Decrease LR to {lr / factor}")
+                lr /= factor
+                patinece_timer = patience
+            if iters >= patience and (lr == 0.0 or np.abs(E[iters - patience] - E[iters]) <= stop_diff):
+                break
         if stop_at_mean and E[iters] < 1 / 12:
             break
         if optimizer == 'SGD' and E[iters] < 1.0:
@@ -213,10 +213,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
 
         D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-        D['E', 'C'][main_indexes[0],:] = 0.0
+        if X_mask:
+            D['E', 'C'][main_indexes[0],:] = 0.0
 
         D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
-        D['E', 'Theta'][main_indexes[0],:] = 0.0
+        if X_mask:
+            D['E', 'Theta'][main_indexes[0],:] = 0.0
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - f / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
@@ -236,7 +238,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             if phi_x_mask:
                 phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1)
 
-        C[main_indexes[1],:] = sphere_project(C[main_indexes[1],:], C[main_indexes[0],:], R_scale)
+        if X_mask:
+            C[main_indexes[1],:] = sphere_project(C[main_indexes[1],:], C[main_indexes[0],:], R_scale)
 
     print(f'{E_min = }')
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
@@ -388,7 +391,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         ax0.set_ylim(zmin, zmax)
         ax0.set_zlim(-ymax, -ymin)
         ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
-        ax0.set_zticklabels(ax0.get_zticks()[::-1])
+        ax0.set_zticklabels(-ax0.get_zticks())
         ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
         ax0.set_xlabel('x')
         ax0.set_ylabel('z')
@@ -402,9 +405,9 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         tan_phi_x_2 = np.tan(phi_x / 2)
         r = W / H
         camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                                [- tan_phi_x_2, tan_phi_x_2 / r, 1],
-                                [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                                [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+                                   [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+                                   [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                                   [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
         camera_corners_rot = camera_corners @ R.T
         # Поворот всей системы вокруг оси x на угол -pi/2
         Ryz = np.array([[1, 0, 0],
