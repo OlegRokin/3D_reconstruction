@@ -126,8 +126,8 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
-        optimizer='Adam', stop_at_mean=False, patience=2000, factor=2.0,
-        stop_diff=0.0, print_step=1000, ret_arrays=False):
+        optimizer='Adam', patience=2000, factor=2.0,
+        stop_value=0.0, stop_diff=0.0, print_step=1000, ret_arrays=False):
     X_visible = ~np.isnan(X_pix)[:,:,0]
     NK_nan = X_visible.sum()
     X_pix_center = X_pix + 0.5
@@ -192,7 +192,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 patinece_timer = patience
             if iters >= patience and (lr == 0.0 or np.abs(E[iters - patience] - E[iters]) <= stop_diff):
                 break
-        if stop_at_mean and E[iters] < 1 / 12:
+        if E[iters] <= stop_value:
             break
         if optimizer == 'SGD' and E[iters] < 1.0:
             print(f"{iters} : Turn to Adam")
@@ -382,8 +382,8 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
         for j in range(C.shape[0]):
             ax.text(*C[j,:], f'c{j}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0.2,
-                     axis_off=False, grid_off=False, show_traces=False, ret_axis=False):
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=20, f=0.2,
+                     axis_off=False, grid_off=False, trajectory_markers=False, show_traces=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     xmin, ymin, zmin = np.vstack((X.min(axis=0), C.min(axis=0))).min(axis=0)
@@ -422,17 +422,22 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
         camera_dir_rot = camera_dir_rot.ravel()
         camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
 
-        X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r)[:,0,:]
-        X_pix = np.floor(X_model)
-        I = np.where((X_pix[:,0] < 0) | (X_pix[:,0] >= W) | (X_pix[:,1] < 0) | (X_pix[:,1] >= H))
-        X_pix[I] = np.nan
+        # X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r)[:,0,:]
+        # X_pix = np.floor(X_model)
+        # I = np.where((X_pix[:,0] < 0) | (X_pix[:,0] >= W) | (X_pix[:,1] < 0) | (X_pix[:,1] >= H))
+        # X_pix[I] = np.nan
+        X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r, delete_boundaries_points=True)[:,0,:]
 
-        X_visible = ~np.isnan(X_pix[:,0])
+        # X_visible = ~np.isnan(X_pix[:,0])
+        X_visible = ~np.isnan(X_model[:,0])
         I_visible = np.where(X_visible == True)[0]
         ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
         I_not_visible = np.where(X_visible == False)[0]
         ax0.plot(*X_show[I_not_visible,:].T, marker='o', linestyle=' ', markersize=3, color='red', alpha=0.5)
-        ax0.plot(*C_show.T, color='blue')
+        if not trajectory_markers:
+            ax0.plot(*C_show.T, color='blue')
+        else:
+            ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
         ax0.plot(*C_show[j,:], marker='o', linestyle=' ', markersize=4, color='blue')
 
         if show_traces:
@@ -454,9 +459,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
                                             linewidth=1.0, colors='blue'))
         ax0.add_collection3d(Poly3DCollection([C_show[j,:] + f * camera_corners_rot], facecolor='blue', alpha=0.25))
 
-        return X_pix, I_visible
+        # return X_pix, I_visible
+        return X_model, I_visible
 
-    X_pix, I_visible = draw_3d(j_slider.val)
+    # X_pix, I_visible = draw_3d(j_slider.val)
+    X_model, I_visible = draw_3d(j_slider.val)
 
     ax1 = fig.add_subplot(1, 2, 2)
     ax1.set_xlim(0, W)
@@ -466,15 +473,26 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, dist_scale=20, f=0
     ax1.set_yticks(np.linspace(H, 0, 5))
 
     dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
-    points = ax1.scatter(*X_pix[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+    # points = ax1.scatter(*X_pix[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+    X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+    if X_pix is not None:
+        X_pix_center = X_pix[:,j_slider.val,:] + 0.5
+        X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale/dist.max(), marker='*', color='red', zorder=10)
+
 
     def update(val):
         ax0.clear()
-        X_pix, I_visible = draw_3d(j_slider.val)
+        # X_pix, I_visible = draw_3d(j_slider.val)
+        X_model, I_visible = draw_3d(j_slider.val)
 
         dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
-        points.set_offsets(X_pix[I_visible,:])
-        points.set_sizes(dist_scale/dist)
+        # points.set_offsets(X_pix[I_visible,:])
+        X_model_points.set_offsets(X_model[I_visible,:])
+        X_model_points.set_sizes(dist_scale/dist)
+        if X_pix is not None:
+            X_pix_center = X_pix[:,j_slider.val,:] + 0.5
+            X_pix_points.set_offsets(X_pix_center)
+            X_pix_points.set_sizes([dist_scale/dist.max()]*X_pix.shape[0])
         
     j_slider.on_changed(update)
 
