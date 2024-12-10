@@ -1,8 +1,11 @@
 NAME = "cameramodel"
 
 import numpy as np
-import scipy.ndimage as ndimage
+# import scipy.ndimage as ndimage
+from matplotlib.axes import Axes
+from mpl_toolkits.mplot3d.axes3d import Axes3D
 import matplotlib.patches as patches
+from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from matplotlib.widgets import Slider
 
@@ -79,11 +82,11 @@ def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
     if dir_only: return X_proj
     else: return X_proj + C[np.newaxis,:,:]
 
-def transform(X, C, Theta, phi_x, W, r, delete_back_points=True, delete_boundaries_points=False):
+def transform(X, C, Theta, phi_x, W, r, delete_back_points=True, delete_boundary_points=False):
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
     if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
-    if delete_boundaries_points:
+    if delete_boundary_points:
         I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= W / r))
         X_model[I, J] = np.nan
     return X_model
@@ -126,7 +129,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
-        optimizer='Adam', patience=2000, factor=2.0,
+        optimizer='Adam', patience=1000, factor=2.0,
         stop_value=0.0, stop_diff=0.0, print_step=1000, ret_arrays=False):
     X_visible = ~np.isnan(X_pix)[:,:,0]
     NK_nan = X_visible.sum()
@@ -152,12 +155,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     iters = 0
     E = np.zeros(max_iters)
     E_min = np.inf
-    patinece_timer = patience
+    patience_timer = patience
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
     if ret_arrays:
-        X_list, C_list, Theta_list,phi_x_list = [], [], [], []
+        X_list, C_list, Theta_list, phi_x_list = [], [], [], []
 
     for iters in range(max_iters):
         if ret_arrays and iters % 100 == 0:
@@ -179,24 +182,49 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
-        if iters % print_step == 0: print(f"{iters} : {E[iters]}")
+        if iters % print_step == 0: print(f'{iters} : {E[iters]}')
         if iters >= 1:
-            if patinece_timer > 0:
-                patinece_timer -= 1
+            # if patinece_timer > 0:
+            #     patinece_timer -= 1
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-            if patinece_timer <= 0 and E[iters] >= E[iters - patience]:
-                print(f"{iters} : Decrease LR to {lr / factor}")
-                lr /= factor
-                patinece_timer = patience
-            if iters >= patience and (lr == 0.0 or np.abs(E[iters - patience] - E[iters]) <= stop_diff):
-                break
+            # if patinece_timer <= 0 and E[iters] >= E[iters - patience]:
+            # if patinece_timer <= 0 and E[iters] > E_min:
+            #     print(f"{iters} : Decrease LR to {lr / factor}")
+            #     lr /= factor
+            #     patinece_timer = patience
+                if patience_timer != patience:
+                    patience_timer = patience
+            # if E[iters] > E_min:
+            elif E[iters] > E_min:
+                if patience_timer > 0:
+                    patience_timer -= 1
+                else:
+                    print(f'{iters} : Decrease LR to {lr / factor}')
+                    lr /= factor
+                    patience_timer = patience
+            # elif patience_timer != patience:
+            #     patience_timer = patience
+            # if iters >= patience and (lr == 0.0 or np.abs(E[iters - patience] - E[iters]) <= stop_diff):
+            if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
+                if patience_timer > 0:
+                    patience_timer -= 1
+                    # print(f'{iters} : {patience_timer = }')
+                else:
+                    # print(f'E[{iters - patience}] = {E[iters - patience]}')
+                    # print(f'E[{iters}] = {E[iters]}')
+                    # print(f'E[{iters - patience}] - E[{iters}] = {E[iters - patience] - E[iters]}')
+                    break
+            # elif patinece_timer != patience:
+            #     patinece_timer = patience
+            # elif patinece_timer < patience:
+            #     patinece_timer += 1
         if E[iters] <= stop_value:
             break
-        if optimizer == 'SGD' and E[iters] < 1.0:
-            print(f"{iters} : Turn to Adam")
-            optimizer = 'Adam'
+        # if optimizer == 'SGD' and E[iters] < 1.0:
+        #     print(f"{iters} : Turn to Adam")
+        #     optimizer = 'Adam'
 
         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
         D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
@@ -232,7 +260,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 X = sgd(X, D['E', 'X'], lr)
             C = sgd(C, D['E', 'C'], lr)
             Theta = sgd(Theta, D['E', 'Theta'], lr)
-            if phi_x_mask: phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
+            if phi_x_mask:
+                phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
         elif optimizer == 'Adam':
             if X_mask:
                 X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1)
@@ -248,17 +277,17 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
     else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
 
-def get_pixels(image):
-    labeled_image, num_features = ndimage.label(image > 1e-1)
-    pixels = np.zeros((num_features, 2))
-    for label in range(1, num_features + 1):
-        mask = labeled_image == label
-        if image.ndim == 2: coords = np.column_stack(np.where(mask))[:,::-1]
-        elif image.ndim == 3: coords = np.column_stack(np.where(mask)[1:])[:,::-1]
-        avg_coords = np.average(coords, weights=image[mask], axis=0)
-        pixels[label-1] = avg_coords
-    if image.ndim == 2: return pixels
-    elif image.ndim == 3: return pixels.reshape(image.shape[0], -1, 2).transpose(1, 0, 2)
+# def get_pixels(image):
+#     labeled_image, num_features = ndimage.label(image > 1e-1)
+#     pixels = np.zeros((num_features, 2))
+#     for label in range(1, num_features + 1):
+#         mask = labeled_image == label
+#         if image.ndim == 2: coords = np.column_stack(np.where(mask))[:,::-1]
+#         elif image.ndim == 3: coords = np.column_stack(np.where(mask)[1:])[:,::-1]
+#         avg_coords = np.average(coords, weights=image[mask], axis=0)
+#         pixels[label-1] = avg_coords
+#     if image.ndim == 2: return pixels
+#     elif image.ndim == 3: return pixels.reshape(image.shape[0], -1, 2).transpose(1, 0, 2)
 
 def optimal_subplot_layout(n_plots, r):
     cols = np.ceil(np.sqrt(n_plots))
@@ -382,13 +411,15 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
         for j in range(C.shape[0]):
             ax.text(*C[j,:], f'c{j}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=20, f=0.2,
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10, f=0.2,
                      axis_off=False, grid_off=False, trajectory_markers=False, show_traces=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
+
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
+    assert isinstance(ax0, Axes3D)
     xmin, ymin, zmin = np.vstack((X.min(axis=0), C.min(axis=0))).min(axis=0)
     xmax, ymax, zmax = np.vstack((X.max(axis=0), C.max(axis=0))).max(axis=0)
-    
+
     def draw_3d(j):
         ax0.set_xlim(xmin, xmax)
         ax0.set_ylim(zmin, zmax)
@@ -422,14 +453,10 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         camera_dir_rot = camera_dir_rot.ravel()
         camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
 
-        # X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r)[:,0,:]
-        # X_pix = np.floor(X_model)
-        # I = np.where((X_pix[:,0] < 0) | (X_pix[:,0] >= W) | (X_pix[:,1] < 0) | (X_pix[:,1] >= H))
-        # X_pix[I] = np.nan
-        X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r, delete_boundaries_points=True)[:,0,:]
-
-        # X_visible = ~np.isnan(X_pix[:,0])
-        X_visible = ~np.isnan(X_model[:,0])
+        X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r,
+                            delete_back_points=True, delete_boundary_points=True)[:,0,:]
+        if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
+        else: X_visible = ~np.isnan(X_pix[:,j,0])
         I_visible = np.where(X_visible == True)[0]
         ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
         I_not_visible = np.where(X_visible == False)[0]
@@ -444,7 +471,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
             X_proj = project(X[I_visible], C[j].reshape(1, -1), Theta[j].reshape(1, -1), f)[:,0,:]
             X_proj_show = rotate_scene(X_proj, Ryz)
             ax0.add_collection(Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
-                                                linewidth=0.5, colors='red', alpha=0.5))
+                                                linewidth=1.0, colors='red', alpha=0.5))
             ax0.plot(*X_proj_show.T, marker='o', linestyle=' ', markersize=1.5, color='red', alpha=0.5)
 
         ax0.plot(*np.vstack((C_show[j,:], C_show[j,:] + f * camera_dir_rot)).T,
@@ -459,40 +486,47 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
                                             linewidth=1.0, colors='blue'))
         ax0.add_collection3d(Poly3DCollection([C_show[j,:] + f * camera_corners_rot], facecolor='blue', alpha=0.25))
 
-        # return X_pix, I_visible
         return X_model, I_visible
 
-    # X_pix, I_visible = draw_3d(j_slider.val)
     X_model, I_visible = draw_3d(j_slider.val)
 
     ax1 = fig.add_subplot(1, 2, 2)
+    assert isinstance(ax1, Axes)
     ax1.set_xlim(0, W)
     ax1.set_ylim(H, 0)
     ax1.set_aspect('equal')
     ax1.set_xticks(np.linspace(0, W, 5))
     ax1.set_yticks(np.linspace(H, 0, 5))
 
-    dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
-    # points = ax1.scatter(*X_pix[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
-    X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+    
+    # dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
+    # X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+    dist = distance(X, C, Theta)
+    dist /= dist.max()
+    X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
-        X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale/dist.max(), marker='*', color='red', zorder=10)
+        # X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale/dist.max(), marker='*', color='red', zorder=10)
+        # X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='*', color='red', zorder=10)
+        X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
 
+        X_lines = LineCollection(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1),
+                                 color='red', linewidth=1.0, alpha=0.5)
+        ax1.add_collection(X_lines)
 
     def update(val):
         ax0.clear()
-        # X_pix, I_visible = draw_3d(j_slider.val)
         X_model, I_visible = draw_3d(j_slider.val)
 
-        dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
-        # points.set_offsets(X_pix[I_visible,:])
+        # dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
         X_model_points.set_offsets(X_model[I_visible,:])
-        X_model_points.set_sizes(dist_scale/dist)
+        # X_model_points.set_sizes(dist_scale/dist)
+        X_model_points.set_sizes(dist_scale/dist[I_visible,j_slider.val])
         if X_pix is not None:
             X_pix_center = X_pix[:,j_slider.val,:] + 0.5
             X_pix_points.set_offsets(X_pix_center)
-            X_pix_points.set_sizes([dist_scale/dist.max()]*X_pix.shape[0])
+            # X_pix_points.set_sizes([dist_scale/dist.max()]*X_pix.shape[0])
+            X_lines.set_segments(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1))
         
     j_slider.on_changed(update)
 
@@ -563,15 +597,15 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     p_x, p_y = W / 2, H / 2
     K_ = np.array([[f, 0.0, p_x],
                    [0.0, f, p_y],
-                   [0.0, 0.0, 1]])
+                   [0.0, 0.0, 1.0]])
 
     P1 = np.column_stack((K_, np.zeros(3)))
     E = K_.T @ F @ K_
     U, d, Vh = np.linalg.svd(E)
 
-    W_ = np.array([[0, -1, 0],
-                   [1, 0, 0],
-                   [0, 0, 1]])
+    W_ = np.array([[0.0, -1.0, 0.0],
+                   [1.0, 0.0, 0.0],
+                   [0.0, 0.0, 1.0]])
     
     status = False
     for k in range(4):
