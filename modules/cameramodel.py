@@ -184,19 +184,11 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f'{iters} : {E[iters]}')
         if iters >= 1:
-            # if patinece_timer > 0:
-            #     patinece_timer -= 1
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-            # if patinece_timer <= 0 and E[iters] >= E[iters - patience]:
-            # if patinece_timer <= 0 and E[iters] > E_min:
-            #     print(f"{iters} : Decrease LR to {lr / factor}")
-            #     lr /= factor
-            #     patinece_timer = patience
                 if patience_timer != patience:
                     patience_timer = patience
-            # if E[iters] > E_min:
             elif E[iters] > E_min:
                 if patience_timer > 0:
                     patience_timer -= 1
@@ -204,27 +196,13 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     print(f'{iters} : Decrease LR to {lr / factor}')
                     lr /= factor
                     patience_timer = patience
-            # elif patience_timer != patience:
-            #     patience_timer = patience
-            # if iters >= patience and (lr == 0.0 or np.abs(E[iters - patience] - E[iters]) <= stop_diff):
             if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
                 if patience_timer > 0:
                     patience_timer -= 1
-                    # print(f'{iters} : {patience_timer = }')
                 else:
-                    # print(f'E[{iters - patience}] = {E[iters - patience]}')
-                    # print(f'E[{iters}] = {E[iters]}')
-                    # print(f'E[{iters - patience}] - E[{iters}] = {E[iters - patience] - E[iters]}')
                     break
-            # elif patinece_timer != patience:
-            #     patinece_timer = patience
-            # elif patinece_timer < patience:
-            #     patinece_timer += 1
         if E[iters] <= stop_value:
             break
-        # if optimizer == 'SGD' and E[iters] < 1.0:
-        #     print(f"{iters} : Turn to Adam")
-        #     optimizer = 'Adam'
 
         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
         D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
@@ -498,16 +476,12 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     ax1.set_xticks(np.linspace(0, W, 5))
     ax1.set_yticks(np.linspace(H, 0, 5))
 
-    
-    # dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
-    # X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist, marker='o', color='red', zorder=10)
+
     dist = distance(X, C, Theta)
     dist /= dist.max()
     X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
-        # X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale/dist.max(), marker='*', color='red', zorder=10)
-        # X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='*', color='red', zorder=10)
         X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
 
         X_lines = LineCollection(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1),
@@ -518,14 +492,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         ax0.clear()
         X_model, I_visible = draw_3d(j_slider.val)
 
-        # dist = distance(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1))[:,0]
         X_model_points.set_offsets(X_model[I_visible,:])
-        # X_model_points.set_sizes(dist_scale/dist)
         X_model_points.set_sizes(dist_scale/dist[I_visible,j_slider.val])
         if X_pix is not None:
             X_pix_center = X_pix[:,j_slider.val,:] + 0.5
             X_pix_points.set_offsets(X_pix_center)
-            # X_pix_points.set_sizes([dist_scale/dist.max()]*X_pix.shape[0])
             X_lines.set_segments(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1))
         
     j_slider.on_changed(update)
