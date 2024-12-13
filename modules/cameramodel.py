@@ -314,7 +314,7 @@ def draw_2d_views(axes, X_pix, W, H, X_model=None, object_corner_list=None, pict
                 else: ax.annotate(f'${i}$', xy=X_model[i,j,:], va=va, ha=ha, color=fontcolor, size=fontsize, zorder=10)
         else: ax.axis('off')
 
-def rotate_scene(V, R):
+def rotate_array(V, R):
     if V.ndim == 2: return V @ R.T
     elif V.ndim == 3: return np.einsum('kl,ijl->ijk', R, V)
 
@@ -337,12 +337,12 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
     Ryz = np.array([[1, 0, 0],
                     [0, 0, 1],
                     [0, -1, 0]])
-    X = rotate_scene(X, Ryz)
-    C = rotate_scene(C, Ryz)
-    camera_dir = rotate_scene(camera_dir, Ryz)
-    camera_corners = rotate_scene(camera_corners, Ryz)
+    X = rotate_array(X, Ryz)
+    C = rotate_array(C, Ryz)
+    camera_dir = rotate_array(camera_dir, Ryz)
+    camera_corners = rotate_array(camera_corners, Ryz)
     if show_projections:
-        X_proj = rotate_scene(X_proj, Ryz)
+        X_proj = rotate_array(X_proj, Ryz)
 
 
     if show_traces:
@@ -422,14 +422,14 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
                                    [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
         camera_corners_rot = camera_corners @ R.T
         # Поворот всей системы вокруг оси x на угол -pi/2
-        Ryz = np.array([[1, 0, 0],
-                        [0, 0, 1],
-                        [0, -1, 0]])
-        X_show = rotate_scene(X, Ryz)
-        C_show = rotate_scene(C, Ryz)
-        camera_dir_rot = rotate_scene(camera_dir_rot, Ryz)
+        Ryz = np.array([[1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [0.0, -1.0, 0.0]])
+        X_show = rotate_array(X, Ryz)
+        C_show = rotate_array(C, Ryz)
+        camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
         camera_dir_rot = camera_dir_rot.ravel()
-        camera_corners_rot = rotate_scene(camera_corners_rot, Ryz)
+        camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
 
         X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r,
                             delete_back_points=True, delete_boundary_points=True)[:,0,:]
@@ -447,7 +447,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
 
         if show_traces:
             X_proj = project(X[I_visible], C[j].reshape(1, -1), Theta[j].reshape(1, -1), f)[:,0,:]
-            X_proj_show = rotate_scene(X_proj, Ryz)
+            X_proj_show = rotate_array(X_proj, Ryz)
             ax0.add_collection(Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
                                                 linewidth=1.0, colors='red', alpha=0.5))
             ax0.plot(*X_proj_show.T, marker='o', linestyle=' ', markersize=1.5, color='red', alpha=0.5)
@@ -475,7 +475,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     ax1.set_aspect('equal')
     ax1.set_xticks(np.linspace(0, W, 5))
     ax1.set_yticks(np.linspace(H, 0, 5))
-
 
     dist = distance(X, C, Theta)
     dist /= dist.max()
@@ -558,13 +557,31 @@ def get_theta(R):
     
     return theta
 
+def get_R(x, y):
+    v = np.cross(x, y)
+    v_norm = np.linalg.norm(v)
+    if v_norm > 0.0:
+        xy = np.linalg.norm(x) * np.linalg.norm(y)
+        n = v / v_norm
+        sin_phi = v_norm / xy
+        cos_phi = np.dot(x, y) / xy
+
+        R = cos_phi * np.eye(3)
+        R += (1 - cos_phi) * (n.reshape(-1, 1) @ n.reshape(1, -1))
+        R += sin_phi * np.array([[0.0, -n[2], n[1]],
+                                [n[2], 0.0, -n[0]],
+                                [-n[1], n[0], 0.0]])
+    else:
+        R = np.eye(3)
+    return R
+
 def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     if X_pix.shape[1] != 2:
         raise ValueError(f"Expected X_pix to have shape[1]=2")
     
     X_pix_center = X_pix + 0.5
 
-    f = W / (2 * np.tan(phi_x / 2))
+    f = W / 2 / np.tan(phi_x / 2)
     p_x, p_y = W / 2, H / 2
     K_ = np.array([[f, 0.0, p_x],
                    [0.0, f, p_y],
