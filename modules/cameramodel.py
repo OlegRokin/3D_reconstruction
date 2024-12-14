@@ -398,75 +398,70 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     xmin, ymin, zmin = np.vstack((X.min(axis=0), C.min(axis=0))).min(axis=0)
     xmax, ymax, zmax = np.vstack((X.max(axis=0), C.max(axis=0))).max(axis=0)
 
-    def draw_3d(j):
-        ax0.set_xlim(xmin, xmax)
-        ax0.set_ylim(zmin, zmax)
-        ax0.set_zlim(-ymax, -ymin)
-        ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
-        ax0.set_zticklabels(-ax0.get_zticks())
-        ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
-        ax0.set_xlabel('x')
-        ax0.set_ylabel('z')
-        ax0.set_zlabel('y')
-        if axis_off: ax0.set_axis_off()
-        if grid_off: ax0.grid(False)
+    ax0.set_xlim(xmin, xmax)
+    ax0.set_ylim(zmin, zmax)
+    ax0.set_zlim(-ymax, -ymin)
+    ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
+    ax0.set_zticklabels(-ax0.get_zticks())
+    ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
+    ax0.set_xlabel('x')
+    ax0.set_ylabel('z')
+    ax0.set_zlabel('y')
+    if axis_off: ax0.set_axis_off()
+    if grid_off: ax0.grid(False)
 
-        R = ryxz(Theta[j].reshape(1, -1))[0]
-        camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
-        camera_dir_rot = camera_dir @ R.T
-        tan_phi_x_2 = np.tan(phi_x / 2)
-        r = W / H
-        camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                                   [- tan_phi_x_2, tan_phi_x_2 / r, 1],
-                                   [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                                   [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
-        camera_corners_rot = camera_corners @ R.T
-        # Поворот всей системы вокруг оси x на угол -pi/2
-        Ryz = np.array([[1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                        [0.0, -1.0, 0.0]])
-        X_show = rotate_array(X, Ryz)
-        C_show = rotate_array(C, Ryz)
-        camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
-        camera_dir_rot = camera_dir_rot.ravel()
-        camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
+    R = ryxz(Theta[j_slider.val].reshape(1, -1))[0]
+    camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
+    camera_dir_rot = camera_dir @ R.T
+    tan_phi_x_2 = np.tan(phi_x / 2)
+    r = W / H
+    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                               [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+    camera_corners_rot = camera_corners @ R.T
+    # Поворот всей системы вокруг оси x на угол -pi/2
+    Ryz = np.array([[1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, -1.0, 0.0]])
+    X_show = rotate_array(X, Ryz)
+    C_show = rotate_array(C, Ryz)
+    camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
+    camera_dir_rot = camera_dir_rot.ravel()
+    camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
 
-        X_model = transform(X, C[j].reshape(1, -1), Theta[j].reshape(1, -1), phi_x, W, r,
-                            delete_back_points=True, delete_boundary_points=True)[:,0,:]
-        if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
-        else: X_visible = ~np.isnan(X_pix[:,j,0])
-        I_visible = np.where(X_visible == True)[0]
-        ax0.plot(*X_show[I_visible,:].T, marker='o', linestyle=' ', markersize=4, color='red')
-        I_not_visible = np.where(X_visible == False)[0]
-        ax0.plot(*X_show[I_not_visible,:].T, marker='o', linestyle=' ', markersize=3, color='red', alpha=0.5)
-        if not trajectory_markers:
-            ax0.plot(*C_show.T, color='blue')
-        else:
-            ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
-        ax0.plot(*C_show[j,:], marker='o', linestyle=' ', markersize=4, color='blue')
+    X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
+                        delete_back_points=True, delete_boundary_points=True)[:,0,:]
+    if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
+    else: X_visible = ~np.isnan(X_pix[:,j_slider.val,0])
+    I_visible = np.where(X_visible == True)[0]
+    X_visible_points = ax0.scatter(*X_show[I_visible,:].T, marker='o', s=16, color='red', depthshade=False)
+    I_not_visible = np.where(X_visible == False)[0]
+    X_not_visible_points = ax0.scatter(*X_show[I_not_visible,:].T,  marker='o', s=12, color='red', depthshade=False, alpha=0.5)
+    if not trajectory_markers:
+        ax0.plot(*C_show.T, color='blue')
+    else:
+        ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
+    C_current_point = ax0.scatter(*C_show[j_slider.val,:], marker='o', s=16, color='blue', depthshade=False)
 
-        if show_traces:
-            X_proj = project(X[I_visible], C[j].reshape(1, -1), Theta[j].reshape(1, -1), f)[:,0,:]
-            X_proj_show = rotate_array(X_proj, Ryz)
-            ax0.add_collection(Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
-                                                linewidth=1.0, colors='red', alpha=0.5))
-            ax0.plot(*X_proj_show.T, marker='o', linestyle=' ', markersize=1.5, color='red', alpha=0.5)
+    if show_traces:
+        X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
+        X_proj_show = rotate_array(X_proj, Ryz)
 
-        ax0.plot(*np.vstack((C_show[j,:], C_show[j,:] + f * camera_dir_rot)).T,
-                 linewidth=1.0, linestyle='--', color='blue')
+        X_proj_traces = Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
+                                    linewidth=1.0, colors='red', alpha=0.5)
+        ax0.add_collection(X_proj_traces)
+        X_proj_points = ax0.scatter(*X_proj_show.T, marker='o',  s=3, color='red', alpha=0.5)
 
-        ax0.add_collection(Line3DCollection(np.stack((np.tile(C_show[j,:], (4, 1)),
-                                                      C_show[j,:] + f * camera_corners_rot), axis=1),
-                                            linewidth=1.0, colors='blue'))
-        ax0.add_collection(Line3DCollection(np.stack([np.vstack((C_show[j,:] + f * camera_corners_rot[i,:],
-                                                                 C_show[j,:] + f * camera_corners_rot[(i+1)%4,:]))
-                                                      for i in range(4)], axis=1),
-                                            linewidth=1.0, colors='blue'))
-        ax0.add_collection3d(Poly3DCollection([C_show[j,:] + f * camera_corners_rot], facecolor='blue', alpha=0.25))
+    camera_dir_line, = ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
+                                linewidth=1.0, linestyle='--', color='blue')
 
-        return X_model, I_visible
-
-    X_model, I_visible = draw_3d(j_slider.val)
+    center_to_corners = Line3DCollection(np.stack((np.tile(C_show[j_slider.val,:], (4, 1)),
+                                                   C_show[j_slider.val,:] + f * camera_corners_rot), axis=1),
+                                         linewidth=1.0, colors='blue')
+    ax0.add_collection(center_to_corners)
+    corners_surface = Poly3DCollection([C_show[j_slider.val,:] + f * camera_corners_rot], linewidths=1.0, edgecolors='blue', facecolor='blue', alpha=0.25)
+    ax0.add_collection3d(corners_surface)
 
     ax1 = fig.add_subplot(1, 2, 2)
     assert isinstance(ax1, Axes)
@@ -488,9 +483,37 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         ax1.add_collection(X_lines)
 
     def update(val):
-        ax0.clear()
-        X_model, I_visible = draw_3d(j_slider.val)
+        X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
+                            delete_back_points=True, delete_boundary_points=True)[:,0,:]
+        if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
+        else: X_visible = ~np.isnan(X_pix[:,j_slider.val,0])
+        I_visible = np.where(X_visible == True)[0]
+        I_not_visible = np.where(X_visible == False)[0]
 
+        X_visible_points._offsets3d = X_show[I_visible,:].T
+        X_not_visible_points._offsets3d = X_show[I_not_visible,:].T
+        C_current_point._offsets3d = C_show[j_slider.val,:].reshape(-1, 1)
+
+        X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
+        X_proj_show = rotate_array(X_proj, Ryz)
+        X_proj_traces.set_segments(np.stack((X_show[I_visible], X_proj_show), axis=1))
+        X_proj_points._offsets3d = X_proj_show.T
+
+        R = ryxz(Theta[j_slider.val].reshape(1, -1))[0]
+        camera_dir_rot = camera_dir @ R.T
+        camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
+        camera_dir_rot = camera_dir_rot.ravel()
+        camera_corners_rot = camera_corners @ R.T
+        camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
+
+        camera_dir_array = np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot))
+        camera_dir_line.set_data(*camera_dir_array[:,:2].T)
+        camera_dir_line.set_3d_properties(camera_dir_array[:,2])
+
+        center_to_corners.set_segments(np.stack((np.tile(C_show[j_slider.val,:], (4, 1)),
+                                                 C_show[j_slider.val,:] + f * camera_corners_rot), axis=1))
+        corners_surface.set_verts([C_show[j_slider.val,:] + f * camera_corners_rot])
+        
         X_model_points.set_offsets(X_model[I_visible,:])
         X_model_points.set_sizes(dist_scale/dist[I_visible,j_slider.val])
         if X_pix is not None:
