@@ -183,7 +183,9 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         if iters % print_step == 0: print(f'{iters} : {E[iters]}')
-        if iters >= 1:
+        if iters == 0:
+            E_min = E[iters]
+        else:
             if E[iters] < E_min:
                 E_min = E[iters]
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
@@ -196,6 +198,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     print(f'{iters} : Decrease LR to {lr / factor}')
                     lr /= factor
                     patience_timer = patience
+                    X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
+                    if optimizer == 'Adam':
+                        s_X = r_X = np.zeros_like(X)
+                        s_C = r_C = np.zeros_like(C)
+                        s_Theta = r_Theta = np.zeros_like(Theta)
+                        s_phi_x = r_phi_x = 0
             if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
                 if patience_timer > 0:
                     patience_timer -= 1
@@ -390,7 +398,8 @@ def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_pr
             ax.text(*C[j,:], f'c{j}')
 
 def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10, f=0.2,
-                     axis_off=False, grid_off=False, trajectory_markers=False, show_traces=False, ret_axis=False):
+                     trajectory_markers=False, show_image_lines=False, show_image_traces=False,
+                     axis_off=False, grid_off=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
 
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
@@ -444,7 +453,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
     C_current_point = ax0.scatter(*C_show[j_slider.val,:], marker='o', s=16, color='blue', depthshade=False)
 
-    if show_traces:
+    if show_image_lines:
         X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
         X_proj_show = rotate_array(X_proj, Ryz)
 
@@ -473,7 +482,13 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
 
     dist = distance(X, C, Theta)
     dist /= dist.max()
-    X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
+    if not show_image_traces:
+        X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
+    # else:
+    #     line_length = 10
+    #     linewidths = np.linspace(0.0, )
+    #     X_model_lines = LineCollection()
+
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
         X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
@@ -494,10 +509,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         X_not_visible_points._offsets3d = X_show[I_not_visible,:].T
         C_current_point._offsets3d = C_show[j_slider.val,:].reshape(-1, 1)
 
-        X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
-        X_proj_show = rotate_array(X_proj, Ryz)
-        X_proj_traces.set_segments(np.stack((X_show[I_visible], X_proj_show), axis=1))
-        X_proj_points._offsets3d = X_proj_show.T
+        if show_image_lines:
+            X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
+            X_proj_show = rotate_array(X_proj, Ryz)
+            X_proj_traces.set_segments(np.stack((X_show[I_visible], X_proj_show), axis=1))
+            X_proj_points._offsets3d = X_proj_show.T
 
         R = ryxz(Theta[j_slider.val].reshape(1, -1))[0]
         camera_dir_rot = camera_dir @ R.T
