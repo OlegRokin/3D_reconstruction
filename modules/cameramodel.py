@@ -157,6 +157,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E_min = np.inf
     patience_timer = patience
     success_timer = patience
+    increased = False
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
@@ -192,18 +193,20 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
                 if patience_timer != patience:
                     patience_timer = patience
-                if success_timer > 0:
-                    success_timer -= 1
-                else:
-                    print(f'{iters} : Icrease LR to {lr * factor}')
-                    lr *= factor
-                    patience_timer = patience
-                    X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
-                    if optimizer == 'Adam':
-                        s_X = r_X = np.zeros_like(X)
-                        s_C = r_C = np.zeros_like(C)
-                        s_Theta = r_Theta = np.zeros_like(Theta)
-                        s_phi_x = r_phi_x = 0
+                if not increased:
+                    if success_timer > 0:
+                        success_timer -= 1
+                    else:
+                        print(f'{iters} : Icrease LR to {lr * factor}')
+                        lr *= factor
+                        success_timer = patience
+                        increased = True
+                        X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
+                        if optimizer == 'Adam':
+                            s_X = r_X = np.zeros_like(X)
+                            s_C = r_C = np.zeros_like(C)
+                            s_Theta = r_Theta = np.zeros_like(Theta)
+                            s_phi_x = r_phi_x = 0
             elif E[iters] > E_min:
                 if success_timer != patience:
                     success_timer = patience
@@ -213,6 +216,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     print(f'{iters} : Decrease LR to {lr / factor}')
                     lr /= factor
                     patience_timer = patience
+                    increased = False
                     X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
                     if optimizer == 'Adam':
                         s_X = r_X = np.zeros_like(X)
