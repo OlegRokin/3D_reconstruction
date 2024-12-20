@@ -157,7 +157,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     E_min, E_min_temp = np.inf, np.inf
     patience_timer = patience
     success_timer = patience
-    increased = True
+    increased = False
+    diff_timer = patience
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
@@ -184,6 +185,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
+        
         if iters % print_step == 0: print(f'{iters} : {E[iters]}')
         if iters == 0:
             E_min = E[iters]
@@ -201,16 +203,6 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                         lr *= factor
                         success_timer = patience
                         increased = True
-                        X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
-                        X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-                        Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
-                        R = Ry @ Rx @ Rz
-                        X_rot = np.einsum('jlk,ijl->ijk', R, X_tr)
-                        if phi_x_mask:
-                            tan_phi_x_2 = np.tan(phi_x / 2)
-                            f = W / 2 / tan_phi_x_2
-                        X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
-                        X_diff = np.nan_to_num(X_model - X_pix_center)
                         if optimizer == 'Adam':
                             E_min_temp = E_min
                             s_X_temp, r_X_temp = s_X.copy(), r_X.copy()
@@ -222,6 +214,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_Theta = r_Theta = np.zeros_like(Theta)
                             s_phi_x = r_phi_x = 0
             elif E[iters] > E_min:
+                if increased and E[iters] / E_min > 1e2:
+                    patience_timer = 0
                 if success_timer != patience:
                     success_timer = patience
                 if patience_timer > 0:
@@ -230,7 +224,6 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     print(f'{iters} : Decrease LR to {lr / factor}')
                     lr /= factor
                     patience_timer = patience
-                    increased = False
                     X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
                     X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
                     Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
@@ -242,7 +235,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
                     X_diff = np.nan_to_num(X_model - X_pix_center)
                     if optimizer == 'Adam':
-                        if E_min_temp > E_min:
+                        if not increased or (increased and E_min_temp > E_min):
                             s_X = r_X = np.zeros_like(X)
                             s_C = r_C = np.zeros_like(C)
                             s_Theta = r_Theta = np.zeros_like(Theta)
@@ -252,9 +245,10 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_C, r_C = s_C_temp.copy(), r_C_temp.copy()
                             s_Theta, r_Theta = s_Theta_temp.copy(), r_Theta_temp.copy()
                             s_phi_x, r_phi_x = s_phi_x_temp, r_phi_x_temp
+                    increased = False
             if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
-                if patience_timer > 0:
-                    patience_timer -= 1
+                if diff_timer > 0:
+                    diff_timer -= 1
                 else:
                     break
         if E[iters] <= stop_value:
