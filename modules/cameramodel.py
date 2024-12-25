@@ -732,7 +732,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
 
     if ret_axis: return ax0, ax1
 
-
 def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H, X_pix,
                  j_ids, dist_scale=10, f=0.2, trajectory_markers=False,
                  axis_off=False, grid_off=False, ret_axis=False):
@@ -870,7 +869,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     if ret_axis: return ax0, axs
 
-
 def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
     if X_pix.shape[0] < 8:
         raise ValueError(f"Expected X_pix to have shape[0]>=8")
@@ -925,6 +923,14 @@ def get_theta(R):
             print('Weird in get_theta')
     
     return theta
+
+def get_Theta(R_array):
+    Theta = np.zeros_like(R_array.shape[:2])
+    for j, R in enumerate(R_array):
+        U, d, Vh = np.linalg.svd(R)
+        R_rot = U @ Vh
+        Theta[j] = get_theta(R_rot)
+    return Theta
 
 def get_R(x, y):
     v = np.cross(x, y)
@@ -1054,3 +1060,142 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
         phi_x_opt_array = phi_x_opt_array[np.where((phi_x_opt_array >= Q1 - 1.5 * IQR) & (phi_x_opt_array <= Q3 + 1.5 * IQR))[0]]
 
     return np.mean(phi_x_opt_array)
+
+def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0):
+    K = X_pix.shape[1]
+    X_visible = ~np.isnan(X_pix)[:,:,0]
+
+    j_subset_list = []
+    j_subset_all = np.zeros(0)
+    X_pairs_list = []
+    C_pairs_list = []
+    Theta_pairs_list = []
+
+    iter = 0
+    while j_subset_all.size < max_size:
+        X_pairs = []
+        C_pairs = []
+        Theta_pairs = []
+
+        if iter >= 2:
+            j_diff = j_subset_all[1:] - j_subset_all[:-1]
+            idx = np.where(j_diff > 2)[0]
+            idx = np.concatenate((idx, [idx[-1] + 1]))
+            j_subset_all_ = j_subset_all[idx]
+            if iter % 2 == 0:
+                j = (j_subset_all_[0] + j_subset_all_[1]) // 2
+            else: j = (j_subset_all_[-1] + j_subset_all_[-2]) // 2
+        else:
+            if iter == 0: j = 0
+            else: j = K - 1
+        j_ = []
+        done = False
+        success = True
+        while True:
+            std = 0.0
+            if success:
+                j_.append(j)
+                step = 0
+            while std < min_std:
+                if iter % 2 == 0: step += 1
+                else: step -= 1
+                if (iter % 2 == 0 and j + step >= K - 1) or (iter % 2 == 1 and j + step <= 0):
+                    done = True
+                    break
+                if j + step in j_subset_all:
+                    continue
+                std = np.linalg.norm(np.nanstd(X_pix[:,j,:] - X_pix[:,j+step,:], axis=0))
+            if done: break
+            
+            print(f'{j = }, {step = }, {std = }')
+            i_subset = np.where(X_visible[:,j] * X_visible[:,j+step])[0]
+            print(f'{i_subset.size = }')
+            if i_subset.size < 10:
+                success = False
+                continue
+            if iter % 2 == 0: ij_subset = np.ix_(i_subset, [j, j+step])
+            else: ij_subset = np.ix_(i_subset, [j+step, j])
+            F = fundamental_matrix(X_pix[ij_subset])
+            X_, C, Theta, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True)
+            
+            print(f'{success = }')
+            if not success: continue
+
+            X = np.full((X_pix.shape[0], 3), np.nan)
+            X[i_subset] = X_
+
+            X_pairs.append(X)
+            C_pairs.append(C)
+            Theta_pairs.append(Theta)
+
+            j += step
+
+        j_ = np.array(j_)
+        X_pairs = np.array(X_pairs)
+        C_pairs = np.array(C_pairs)
+        Theta_pairs = np.array(Theta_pairs)
+        if iter % 2 == 1:
+            j_ = j_[::-1]
+            X_pairs = X_pairs[::-1]
+            C_pairs = C_pairs[::-1]
+            Theta_pairs = Theta_pairs[::-1]
+
+        j_subset_list.append(j_)
+        j_subset_all = np.sort(np.array([j for j_subset in j_subset_list for j in j_subset]))
+        X_pairs_list.append(X_pairs)
+        C_pairs_list.append(C_pairs)
+        Theta_pairs_list.append(Theta_pairs)
+        iter += 1
+
+    return j_subset_list, j_subset_all, X_pairs_list, C_pairs_list, Theta_pairs_list
+
+def get_C_Theta_weighted(C_pairs, Theta_pairs, errors, j_pairs_ids_array):
+    K = j_pairs_ids_array.max() + 1
+    weights_double = np.full((K, 2), np.nan)
+    C_double, R_double = np.full((K, 2, 3), np.nan), np.full((K, 2, 3, 3), np.nan)
+    
+    weights_double[j_pairs_ids_array[:,0],0] = weights_double[j_pairs_ids_array[:,1],1] = 1 / errors
+    weights_double /= np.nansum(weights_double, axis=1, keepdims=True)
+
+    C_double[j_pairs_ids_array[:,0],0,:] = C_pairs[:,0,:]
+    C_double[j_pairs_ids_array[:,1],1,:] = C_pairs[:,1,:]
+
+    R_double[j_pairs_ids_array[:,0],0,:,:] = ryxz(Theta_pairs[:,0,:])
+    R_double[j_pairs_ids_array[:,1],1,:,:] = ryxz(Theta_pairs[:,1,:])
+
+    C_weighted = np.nansum(C_double * weights_double[:,:,np.newaxis], axis=1)
+    R_weighted = np.nansum(R_double * weights_double[:,:,np.newaxis,np.newaxis], axis=1)
+    Theta_weighted = get_Theta(R_weighted)
+    
+    return C_weighted, Theta_weighted
+
+def moving_average(X, h):
+    X_new = np.zeros_like(X)
+    for i in range(X.shape[0]):
+        h_ = min(h, i, X.shape[0] - i - 1)
+        X_new[i] = np.mean(X[i-h_:i+h_+1], axis=0)
+    return X_new
+
+def approximate(j_small, j_big, X_small, extrapolate=False):
+    # предполагается, что j_big[0] <= j_small[0] и j_big[-1] >= j_small[-1]
+    if X_small.ndim == 1: X_big = np.full(j_big.size, np.nan)
+    else: X_big = np.full((j_big.size, *X_small.shape[1:]), np.nan)
+
+    if not extrapolate:
+        X_big[:j_small[0]+1] = X_small[0]
+        X_big[j_small[-1]:] = X_small[-1]
+    else:
+        for l in range(j_small[0] + 1):
+            X_big[l] = X_small[0] + (j_big[l] - j_small[0]) / (j_small[1] - j_small[0]) * (X_small[1] - X_small[0])
+        for l in range(j_small[-1], j_big[-1] + 1):
+            X_big[l] = X_small[-1] + (j_big[l] - j_small[-1]) / (j_small[-1] - j_small[-2]) * (X_small[-1] - X_small[-2])
+    
+    k, l = 0, j_small[0] + 1
+    while k < j_small.size - 1:
+        if j_big[l] >= j_small[k] and j_big[l] < j_small[k+1]:
+            X_big[l] = X_small[k] + (j_big[l] - j_small[k]) / (j_small[k+1] - j_small[k]) * (X_small[k+1] - X_small[k])
+            l += 1
+        elif j_big[l] >= j_small[k+1]:
+            k += 1
+
+    return X_big
