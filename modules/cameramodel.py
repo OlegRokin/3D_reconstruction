@@ -166,7 +166,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_list, C_list, Theta_list, phi_x_list = [], [], [], []
 
     for iters in range(max_iters):
-        if ret_arrays and iters % 100 == 0:
+        if ret_arrays:
             X_list.append(X)
             C_list.append(C)
             Theta_list.append(Theta)
@@ -500,7 +500,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         X_proj_show = rotate_array(X_proj, Ryz)
 
         X_proj_traces = Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
-                                    linewidth=1.0, colors='red', alpha=0.5)
+                                         linewidth=1.0, colors='red', alpha=0.5)
         ax0.add_collection(X_proj_traces)
         X_proj_points = ax0.scatter(*X_proj_show.T, marker='o',  s=3, color='red', alpha=0.5)
 
@@ -511,6 +511,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
                                                    C_show[j_slider.val,:] + f * camera_corners_rot), axis=1),
                                          linewidth=1.0, colors='blue')
     ax0.add_collection(center_to_corners)
+    
     corners_surface = Poly3DCollection([C_show[j_slider.val,:] + f * camera_corners_rot], linewidths=1.0, edgecolors='blue', facecolor='blue', alpha=0.25)
     ax0.add_collection3d(corners_surface)
 
@@ -526,10 +527,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     dist /= dist.max()
     if not show_image_traces:
         X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
-    # else:
-    #     line_length = 10
-    #     linewidths = np.linspace(0.0, )
-    #     X_model_lines = LineCollection()
 
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
@@ -582,6 +579,145 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     j_slider.on_changed(update)
 
     if ret_axis: return ax0, ax1
+
+
+def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H, X_pix,
+                 j_ids, dist_scale=10, f=0.2, trajectory_markers=False,
+                 axis_off=False, grid_off=False, ret_axis=False):
+    assert isinstance(t_slider, Slider)
+
+    gs = fig.add_gridspec(nrows=3, ncols=2)
+    ax0 = fig.add_subplot(gs[:,0], projection='3d')
+    assert isinstance(ax0, Axes3D)
+    xmin, ymin, zmin = np.vstack((X_array[-1].min(axis=0), C_array[-1].min(axis=0))).min(axis=0)
+    xmax, ymax, zmax = np.vstack((X_array[-1].max(axis=0), C_array[-1].max(axis=0))).max(axis=0)
+
+    ax0.set_xlim(xmin, xmax)
+    ax0.set_ylim(zmin, zmax)
+    ax0.set_zlim(-ymax, -ymin)
+    ax0.set_zticks(np.round(np.array(ax0.get_zticks()), 6))
+    ax0.set_zticklabels(-ax0.get_zticks())
+    ax0.set_box_aspect([ub - lb for lb, ub in (getattr(ax0, f'get_{a}lim')() for a in 'xyz')])
+    ax0.set_xlabel('x')
+    ax0.set_ylabel('z')
+    ax0.set_zlabel('y')
+    if axis_off: ax0.set_axis_off()
+    if grid_off: ax0.grid(False)
+
+    R = ryxz(Theta_array[t_slider.val,j_ids])
+    camera_dir = np.array([0.0, 0.0, 1.0])
+    camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+    tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2)
+    r = W / H
+    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                               [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+    camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
+    # Поворот всей системы вокруг оси x на угол -pi/2
+    Ryz = np.array([[1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, -1.0, 0.0]])
+    X_show = rotate_array(X_array[t_slider.val], Ryz)
+    C_show = rotate_array(C_array[t_slider.val], Ryz)
+    C_points_show = C_show[j_ids]
+    camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
+    camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
+
+    X_points = ax0.scatter(*X_show.T, marker='o', s=16, color='red', depthshade=False)
+
+    if not trajectory_markers:
+        C_points, = ax0.plot(*C_show.T, color='blue')
+    else:
+        C_points, = ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
+
+    camera_dir_line = Line3DCollection(np.stack((C_points_show,
+                                                 C_points_show + f * camera_dir_rot), axis=1),
+                                       linewidth=1.0, linestyle='--', colors='blue')
+    ax0.add_collection(camera_dir_line)
+
+    center_to_corners = Line3DCollection(np.stack((np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3),
+                                                   np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot), axis=2).reshape(-1, 2, 3),
+                                        linewidth=1.0, colors='blue')
+    ax0.add_collection(center_to_corners)
+
+    corners_surface = Poly3DCollection(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot, linewidths=1.0, edgecolors='blue', facecolor='blue', alpha=0.25)
+    ax0.add_collection3d(corners_surface)
+
+    axs = [fig.add_subplot(gs[i,1]) for i in range(3)]
+    for ax in axs:
+        assert isinstance(ax, Axes)
+        ax.set_xlim(0, W)
+        ax.set_ylim(H, 0)
+        ax.set_aspect('equal')
+        ax.set_xticks(np.linspace(0, W, 5))
+        ax.set_yticks(np.linspace(H, 0, 5))
+
+    I_pix_visible = np.where(~np.isnan(X_pix[:,j_ids,0]) == True)[0]
+    X_pix_center = X_pix[:,j_ids,:] + 0.5
+    X_model = transform(X_array[t_slider.val], C_array[t_slider.val,j_ids], Theta_array[t_slider.val,j_ids], phi_x_array[t_slider.val],
+                                    W, r, delete_back_points=True, delete_boundary_points=True)
+    I_model_visible = np.where(~np.isnan(X_model[:,:,0]) == True)[0]
+    I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)))
+
+    dist = distance(X_array[t_slider.val], C_array[t_slider.val], Theta_array[t_slider.val])
+    dist /= dist.max()
+    X_pix_points, X_model_points, X_lines = 3 * [None], 3 * [None], 3 * [None]
+    for j, ax in enumerate(axs):
+        assert isinstance(ax, Axes)
+        X_pix_points[j] = ax.scatter(*X_pix_center[:,j,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
+        X_model_points[j] = ax.scatter(*X_model[I_model_visible,j,:].T, s=dist_scale/dist[I_model_visible,j], marker='o', color='red', zorder=10)
+        X_lines[j] = LineCollection(np.stack((X_model[I_both_visible,j,:], X_pix_center[I_both_visible,j,:]), axis=1),
+                                    color='red', linewidth=1.0, alpha=0.5)
+        ax.add_collection(X_lines[j])
+
+    def update(val):
+        R = ryxz(Theta_array[t_slider.val,j_ids])
+        camera_dir = np.array([0.0, 0.0, 1.0])
+        camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+        tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2)
+        r = W / H
+        camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
+                                   [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+                                   [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
+                                   [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+        camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
+        # Поворот всей системы вокруг оси x на угол -pi/2
+        Ryz = np.array([[1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [0.0, -1.0, 0.0]])
+        X_show = rotate_array(X_array[t_slider.val], Ryz)
+        C_show = rotate_array(C_array[t_slider.val], Ryz)
+        C_points_show = C_show[j_ids]
+        camera_dir_rot = rotate_array(camera_dir_rot, Ryz)
+        camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
+
+        X_points._offsets3d = X_show.T
+        C_points.set_data(*C_show[:,:2].T)
+        C_points.set_3d_properties(C_show[:,2])
+
+        camera_dir_line.set_segments(np.stack((C_points_show,
+                                               C_points_show + f * camera_dir_rot), axis=1))
+        center_to_corners.set_segments(np.stack((np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3),
+                                                 np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot), axis=2).reshape(-1, 2, 3))
+        corners_surface.set_verts(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot)
+
+        X_model = transform(X_array[t_slider.val], C_array[t_slider.val,j_ids], Theta_array[t_slider.val,j_ids], phi_x_array[t_slider.val],
+                                        W, r, delete_back_points=True, delete_boundary_points=True)
+        I_model_visible = np.where(~np.isnan(X_model[:,:,0]) == True)[0]
+        I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)))
+
+        dist = distance(X_array[t_slider.val], C_array[t_slider.val], Theta_array[t_slider.val])
+        dist /= dist.max()
+        for j, ax in enumerate(axs):
+            X_model_points[j].set_offsets(X_model[I_model_visible,j,:])
+            X_model_points[j].set_sizes(dist_scale/dist[I_model_visible,j])
+            X_lines[j].set_segments(np.stack((X_model[I_both_visible,j,:], X_pix_center[I_both_visible,j,:]), axis=1))
+
+    t_slider.on_changed(update)
+
+    if ret_axis: return ax0, axs
+
 
 def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
     if X_pix.shape[0] < 8:
