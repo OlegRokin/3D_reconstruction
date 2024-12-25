@@ -305,6 +305,136 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
     else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
 
+def glue_scenes(X_scenes, C_scenes, Theta_scenes, lr,
+                max_iters=100000, patience = 200, factor = 2.0,
+                stop_value=0.0, print_step=1000):
+    N, K = X_scenes.shape[:-1]
+    S = np.ones(K)
+    V = np.zeros((K, 3))
+    Psi = np.zeros((K, 3))
+
+    S_release, V_release, Psi_release = S, V, Psi
+
+    D = {}
+    D['R', 'Psi'] = np.zeros((K, 3, 3, 3))
+
+    E = np.zeros(max_iters)
+    E_min = np.inf
+    patience_timer = patience
+    success_timer = patience
+    increased = False
+
+    s_S = r_S = np.zeros_like(S)
+    s_V = r_V = np.zeros_like(V)
+    s_Psi = r_Psi = np.zeros_like(Psi)
+
+    for iters in range(max_iters):
+        Rx, Ry, Rz = rx(Psi[:,0]), ry(Psi[:,1]), rz(Psi[:,2])
+        R = Ry @ Rx @ Rz
+        X_rot = np.einsum('jkl,ijl->ijk', R, X_scenes)
+        X_new = S[np.newaxis,:,np.newaxis] * X_rot + V[np.newaxis,:,:]
+        X_mean = np.nanmean(X_new, axis=1, keepdims=True)
+        X_diff_1 = X_new - X_mean
+        X_diff_2 = X_new - X_scenes[:,0,:][:,np.newaxis,:]
+
+        E[iters] = (np.dot(np.nan_to_num(X_diff_1).ravel(), np.nan_to_num(X_diff_1).ravel()) + np.dot(np.nan_to_num(X_diff_2).ravel(), np.nan_to_num(X_diff_2).ravel())) / (N * K)
+        if iters % print_step == 0: print(f'{iters} : {E[iters]}, {S.mean() = }')
+        if iters == 0:
+            E_min = E[iters]
+        else:
+            if E[iters] < E_min:
+                E_min = E[iters]
+                S_release, V_release, Psi_release = S, V, Psi
+                if patience_timer != patience:
+                    patience_timer = patience
+                if not increased:
+                    if success_timer > 0:
+                        success_timer -= 1
+                    else:
+                        print(f'{iters} : Icrease LR to {lr * factor}')
+                        lr *= factor
+                        success_timer = patience
+                        increased = True
+                        E_min_temp = E_min
+                        s_S_temp, r_S_temp = s_S.copy(), r_S.copy()
+                        s_V_temp, r_V_temp = s_V.copy(), r_V.copy()
+                        s_Psi_temp, r_Psi_temp = s_Psi.copy(), r_Psi.copy()
+                        s_S = r_S = np.zeros_like(S)
+                        s_V = r_V = np.zeros_like(V)
+                        s_Psi = r_Psi = np.zeros_like(Psi)
+            elif E[iters] > E_min:
+                if increased and E[iters] / E_min > 1e2:
+                    patience_timer = 0
+                if success_timer != patience:
+                    success_timer = patience
+                if patience_timer > 0:
+                    patience_timer -= 1
+                else:
+                    print(f'{iters} : Decrease LR to {lr / factor}')
+                    lr /= factor
+                    patience_timer = patience
+                    S, V, Psi = S_release, V_release, Psi_release
+                    Rx, Ry, Rz = rx(Psi[:,0]), ry(Psi[:,1]), rz(Psi[:,2])
+                    R = Ry @ Rx @ Rz
+                    X_rot = np.einsum('jkl,ijl->ijk', R, X_scenes)
+                    X_new = S[np.newaxis,:,np.newaxis] * X_rot + V[np.newaxis,:,:]
+                    X_mean = np.nanmean(X_new, axis=1, keepdims=True)
+                    X_diff_1 = X_new - X_mean
+                    X_diff_2 = X_new - X_scenes[:,0,:][:,np.newaxis,:]
+                    if not increased or (increased and E_min_temp > E_min):
+                        s_S = r_S = np.zeros_like(S)
+                        s_V = r_V = np.zeros_like(V)
+                        s_Psi = r_Psi = np.zeros_like(Psi)
+                    else:
+                        s_S, r_S = s_S_temp.copy(), r_S_temp.copy()
+                        s_V, r_V = s_V_temp.copy(), r_V_temp.copy()
+                        s_Psi, r_Psi = s_Psi_temp.copy(), r_Psi_temp.copy()
+                    increased = False
+        if E[iters] <= stop_value:
+            break
+
+        D['E', 'S'] = 2 * (np.einsum('ijk,ijk->j', np.nan_to_num(X_diff_1 - np.nanmean(X_diff_1, axis=1, keepdims=True)), np.nan_to_num(X_rot)) \
+                           + np.einsum('ijk,ijk->j', np.nan_to_num(X_diff_2), np.nan_to_num(X_rot))) / (N * K)
+        D['E', 'S'][0] = 0.0
+
+        D['E', 'V'] = 2 * np.sum(np.nan_to_num(X_diff_1 - np.nanmean(X_diff_1, axis=1, keepdims=True)) + np.nan_to_num(X_diff_2), axis=0) / (N * K)
+        D['E', 'V'][0] = 0.0
+
+        D['R', 'Psi'][:,:,:,0] = Ry @ d_rx(Psi[:,0]) @ Rz
+        D['R', 'Psi'][:,:,:,1] = d_ry(Psi[:,1]) @ Rx @ Rz
+        D['R', 'Psi'][:,:,:,2] = Ry @ Rx @ d_rz(Psi[:,2])
+        D['X_rot', 'Psi'] = np.einsum('jknl,ijn->ijkl', D['R', 'Psi'], np.nan_to_num(X_scenes))
+        D['E', 'Psi'] = 2 * (np.einsum('ijn,j,ijnk->jk', np.nan_to_num(X_diff_1 - np.nanmean(X_diff_1, axis=1, keepdims=True)), S, D['X_rot', 'Psi']) \
+                             + np.einsum('ijn,j,ijnk->jk', np.nan_to_num(X_diff_2), S, D['X_rot', 'Psi'])) / (N * K)
+        D['E', 'Psi'][0] = 0.0
+
+        S, s_S, r_S = gd_adam(S, D['E', 'S'], lr, s_S, r_S, t=iters+1)
+        S = np.abs(S)
+        V, s_V, r_V = gd_adam(V, D['E', 'V'], lr, s_V, r_V, t=iters+1)
+        Psi, s_Psi, r_Psi = gd_adam(Psi, D['E', 'Psi'], lr, s_Psi, r_Psi, t=iters+1)
+
+    print(S_release, V_release, Psi_release)
+
+    Rx, Ry, Rz = rx(Psi_release[:,0]), ry(Psi_release[:,1]), rz(Psi_release[:,2])
+    R = Ry @ Rx @ Rz
+
+    X_rot = np.einsum('jkl,ijl->ijk', R, X_scenes)
+    X_new = S_release[np.newaxis,:,np.newaxis] * X_rot + V_release[np.newaxis,:,:]
+
+    C_rot = np.einsum('jkl,jnl->jnk', R, C_scenes)
+    C_new = S_release[:,np.newaxis,np.newaxis] * C_rot + V_release[:,np.newaxis,:]
+
+    R_old = np.zeros((K, 2, 3, 3))
+    for j in range(K):
+        R_old[j,:,:,:] = ryxz(Theta_scenes[j,:,:])
+    R_new = np.einsum('jkl,jsln->jskn', R, R_old)
+    Theta_new = np.zeros((K, 2, 3))
+    for j in range(K):
+        Theta_new[j,0,:] = get_theta(R_new[j,0,:,:])
+        Theta_new[j,1,:] = get_theta(R_new[j,1,:,:])
+
+    return X_new, C_new, Theta_new
+
 # def get_pixels(image):
 #     labeled_image, num_features = ndimage.label(image > 1e-1)
 #     pixels = np.zeros((num_features, 2))
@@ -368,76 +498,98 @@ def rotate_array(V, R):
     if V.ndim == 2: return V @ R.T
     elif V.ndim == 3: return np.einsum('kl,ijl->ijk', R, V)
 
-def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_projections=True, show_traces=False, show_nums=False):
-    R = ryxz(Theta)
+def align_scene(X, C, Theta):
+    X_new = X - C[0]
+    C_new = C - C[0]
 
-    camera_dir = np.array([0.0, 0.0, 1.0])
-    camera_dir = np.einsum('ijk,k->ij', R, camera_dir)
-    tan_phi_x_2 = np.tan(phi_x / 2)
-    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
-                               [tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                               [- tan_phi_x_2, - tan_phi_x_2 / r, 1]])
-    camera_corners = np.einsum('ijk,nk->inj', R, camera_corners)
+    R_zero = ryxz(Theta[0,:].reshape(1, -1))[0].T
+    X_new = rotate_array(X_new, R_zero)
+    C_new = rotate_array(C_new, R_zero)
+    R_new = R_zero @ ryxz(Theta)
+    Theta_new = np.zeros((Theta.shape[0], 3))
+    for j, R in enumerate(R_new):
+        Theta_new[j] = get_theta(R)
 
-    if show_projections:
-        X_proj = project(X, C, Theta, f=f)
+    return X_new, C_new, Theta_new
 
-    # Поворот всей системы вокруг оси x на угол -pi/2
-    Ryz = np.array([[1, 0, 0],
-                    [0, 0, 1],
-                    [0, -1, 0]])
-    X = rotate_array(X, Ryz)
-    C = rotate_array(C, Ryz)
-    camera_dir = rotate_array(camera_dir, Ryz)
-    camera_corners = rotate_array(camera_corners, Ryz)
-    if show_projections:
-        X_proj = rotate_array(X_proj, Ryz)
+def normalize_scene(X, C, R_scale=1.0, ret_j=False):
+    j = np.argmax(np.linalg.norm(C - C[0], axis=1))
+    scale = np.linalg.norm(C[j] - C[0])
+    X_new = X * R_scale / scale
+    C_new = C * R_scale / scale
+    if not ret_j: return X_new, C_new
+    else: return X_new, C_new, j
+
+# def draw_3d_scene(ax, X, C, Theta, phi_x, r, f, object_corner_list=None, show_projections=True, show_traces=False, show_nums=False):
+#     R = ryxz(Theta)
+
+#     camera_dir = np.array([0.0, 0.0, 1.0])
+#     camera_dir = np.einsum('ijk,k->ij', R, camera_dir)
+#     tan_phi_x_2 = np.tan(phi_x / 2)
+#     camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
+#                                [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+#                                [tan_phi_x_2, - tan_phi_x_2 / r, 1],
+#                                [- tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+#     camera_corners = np.einsum('ijk,nk->inj', R, camera_corners)
+
+#     if show_projections:
+#         X_proj = project(X, C, Theta, f=f)
+
+#     # Поворот всей системы вокруг оси x на угол -pi/2
+#     Ryz = np.array([[1, 0, 0],
+#                     [0, 0, 1],
+#                     [0, -1, 0]])
+#     X = rotate_array(X, Ryz)
+#     C = rotate_array(C, Ryz)
+#     camera_dir = rotate_array(camera_dir, Ryz)
+#     camera_corners = rotate_array(camera_corners, Ryz)
+#     if show_projections:
+#         X_proj = rotate_array(X_proj, Ryz)
 
 
-    if show_traces:
-        for j in range(C.shape[0]):
-            ax.add_collection(Line3DCollection([[X[i], C[j]] for i in range(X.shape[0])],
-                                               linewidth=0.5, colors='red'))
+#     if show_traces:
+#         for j in range(C.shape[0]):
+#             ax.add_collection(Line3DCollection([[X[i], C[j]] for i in range(X.shape[0])],
+#                                                linewidth=0.5, colors='red'))
 
-    if object_corner_list:
-        for corner in object_corner_list:
-            ax.add_collection(Line3DCollection([[X[corner[0],:], X[corner[1],:]]],
-                                               linewidth=1.5, colors='red'))
-        for j in range(C.shape[0]):
-            for corner in object_corner_list:
-                ax.add_collection(Line3DCollection([[X_proj[corner[0],j,:], X_proj[corner[1],j,:]]],
-                                                   linewidth=1.0, colors='red'))
+#     if object_corner_list:
+#         for corner in object_corner_list:
+#             ax.add_collection(Line3DCollection([[X[corner[0],:], X[corner[1],:]]],
+#                                                linewidth=1.5, colors='red'))
+#         for j in range(C.shape[0]):
+#             for corner in object_corner_list:
+#                 ax.add_collection(Line3DCollection([[X_proj[corner[0],j,:], X_proj[corner[1],j,:]]],
+#                                                    linewidth=1.0, colors='red'))
 
-    ax.scatter(*X.T, marker='o', s=40, color='red')
+#     ax.scatter(*X.T, marker='o', s=40, color='red')
 
-    if show_projections:
-        ax.plot(*X_proj.reshape(X_proj.shape[0] * X_proj.shape[1], 3).T, linestyle=' ', marker='o', markersize=3, color='red')
+#     if show_projections:
+#         ax.plot(*X_proj.reshape(X_proj.shape[0] * X_proj.shape[1], 3).T, linestyle=' ', marker='o', markersize=3, color='red')
 
-    ax.add_collection(Line3DCollection([[C[j,:], C[j,:] + f * camera_dir[j,:]] for j in range(C.shape[0])],
-                                       linewidth=1.0, linestyle='--', colors='blue'))
-    for k in range(4):
-        ax.add_collection(Line3DCollection([[C[j,:], C[j,:] + f * camera_corners[j,k,:]] for j in range(C.shape[0])],
-                                           linewidth=1.0, colors='blue'))
+#     ax.add_collection(Line3DCollection([[C[j,:], C[j,:] + f * camera_dir[j,:]] for j in range(C.shape[0])],
+#                                        linewidth=1.0, linestyle='--', colors='blue'))
+#     for k in range(4):
+#         ax.add_collection(Line3DCollection([[C[j,:], C[j,:] + f * camera_corners[j,k,:]] for j in range(C.shape[0])],
+#                                            linewidth=1.0, colors='blue'))
 
-    camera_corner_list = [[0, 1], [1, 3], [3, 2], [2, 0]]
-    for corner in camera_corner_list:
-        ax.add_collection(Line3DCollection([[C[j,:] + f * camera_corners[j,corner[0],:], C[j,:] + f * camera_corners[j,corner[1],:]] for j in range(C.shape[0])],
-                                           linewidth=1.0, colors='blue'))
-    for j in range(C.shape[0]):
-        verts = np.vstack(([C[j,:] + f * camera_corners[j,0,:]],
-                           [C[j,:] + f * camera_corners[j,1,:]],
-                           [C[j,:] + f * camera_corners[j,3,:]],
-                           [C[j,:] + f * camera_corners[j,2,:]]))
-        ax.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
+#     camera_corner_list = [[0, 1], [1, 3], [3, 2], [2, 0]]
+#     for corner in camera_corner_list:
+#         ax.add_collection(Line3DCollection([[C[j,:] + f * camera_corners[j,corner[0],:], C[j,:] + f * camera_corners[j,corner[1],:]] for j in range(C.shape[0])],
+#                                            linewidth=1.0, colors='blue'))
+#     for j in range(C.shape[0]):
+#         verts = np.vstack(([C[j,:] + f * camera_corners[j,0,:]],
+#                            [C[j,:] + f * camera_corners[j,1,:]],
+#                            [C[j,:] + f * camera_corners[j,3,:]],
+#                            [C[j,:] + f * camera_corners[j,2,:]]))
+#         ax.add_collection3d(Poly3DCollection([verts], facecolor='blue', alpha=0.25))
 
-    ax.scatter(*C.T, marker='o', s=40, color='blue')
+#     ax.scatter(*C.T, marker='o', s=40, color='blue')
 
-    if show_nums:
-        for i in range(X.shape[0]):
-            ax.text(*X[i,:], f'x{i}')
-        for j in range(C.shape[0]):
-            ax.text(*C[j,:], f'c{j}')
+#     if show_nums:
+#         for i in range(X.shape[0]):
+#             ax.text(*X[i,:], f'x{i}')
+#         for j in range(C.shape[0]):
+#             ax.text(*C[j,:], f'c{j}')
 
 def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10, f=0.2,
                      trajectory_markers=False, show_image_lines=False, show_image_traces=False,
@@ -854,3 +1006,51 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     
     if not ret_status: return X, C, Theta
     else: return X, C, Theta, status
+
+def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
+    K = X_pix.shape[1]
+    X_visible = ~np.isnan(X_pix)[:,:,0]
+    r = W / H
+    
+    std_matrix, i_size_matrix = np.full((K, K), np.nan), np.zeros((K, K), dtype=np.int32)
+    for i in range(K):
+        for j in range(i + 1, K):
+            std_matrix[i,j] = np.linalg.norm(np.nanstd(X_pix[:,i,:] - X_pix[:,j,:], axis=0))
+            i_size_matrix[i,j] = np.where(X_visible[:,i] * X_visible[:,j])[0].size
+
+    std_matrix_ids = np.where(std_matrix >= min_std)
+    matrix_ids = np.argsort(std_matrix[std_matrix_ids] / 10.0 + i_size_matrix[std_matrix_ids])[::-1][:5]
+    i_ids, j_ids = std_matrix_ids[0][matrix_ids], std_matrix_ids[1][matrix_ids]
+    
+    phi_x_opt_array = np.zeros(i_ids.size)
+    for k, (i, j) in enumerate(zip(i_ids, j_ids)):
+        print(f'{k = }')
+        i_subset = np.where(X_visible[:,i] * X_visible[:,j])[0]
+        ij_subset = np.ix_(i_subset, [i, j])
+        F = fundamental_matrix(X_pix[ij_subset])
+
+        phi_x_array, h = np.linspace(0, np.pi, 53, retstep=True)
+        phi_x_array = phi_x_array[1:-1]
+
+        E_diff = np.inf
+        while E_diff > 1e-5:
+            E_array = np.full_like(phi_x_array, np.inf)
+
+            for l, phi_x in enumerate(phi_x_array):
+                X_, C_, Theta_, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True)
+                if success:
+                    E_array[l] = error(X_pix[ij_subset], transform(X_, C_, Theta_, phi_x, W, r))
+
+            phi_x_opt = phi_x_array[np.argmin(E_array)]
+            print(f'{phi_x_opt = }')
+            phi_x_array, h = np.linspace(phi_x_opt - h, phi_x_opt + h, 51, retstep=True)
+            E_diff = np.nan_to_num(E_array.max() - E_array.min())
+
+        phi_x_opt_array[k] = phi_x_opt
+
+    if delete_outliers:
+        Q1, Q3 = np.percentile(phi_x_opt_array, [25, 75])
+        IQR = Q3 - Q1
+        phi_x_opt_array = phi_x_opt_array[np.where((phi_x_opt_array >= Q1 - 1.5 * IQR) & (phi_x_opt_array <= Q3 + 1.5 * IQR))[0]]
+
+    return np.mean(phi_x_opt_array)
