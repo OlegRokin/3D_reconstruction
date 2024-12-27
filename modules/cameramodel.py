@@ -214,7 +214,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_Theta = r_Theta = np.zeros_like(Theta)
                             s_phi_x = r_phi_x = 0
             elif E[iters] > E_min:
-                if increased and E[iters] / E_min > 1e2:
+                # if increased and E[iters] / E_min > 1e2:
+                if increased and E[iters] > E_min:
                     patience_timer = 0
                 if success_timer != patience:
                     success_timer = patience
@@ -591,7 +592,7 @@ def normalize_scene(X, C, R_scale=1.0, ret_j=False):
 #         for j in range(C.shape[0]):
 #             ax.text(*C[j,:], f'c{j}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10, f=0.2,
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10.0, f=0.2,
                      trajectory_markers=False, show_image_lines=False, show_image_traces=False,
                      axis_off=False, grid_off=False, ret_axis=False):
     assert isinstance(j_slider, Slider)
@@ -733,7 +734,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     if ret_axis: return ax0, ax1
 
 def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H, X_pix,
-                 j_ids, dist_scale=10, f=0.2, trajectory_markers=False,
+                 j_ids, dist_scale=10.0, f=0.2, trajectory_markers=False,
                  axis_off=False, grid_off=False, ret_axis=False):
     assert isinstance(t_slider, Slider)
 
@@ -869,35 +870,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     if ret_axis: return ax0, axs
 
-def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False):
-    if X_pix.shape[0] < 8:
-        raise ValueError(f"Expected X_pix to have shape[0]>=8")
-    if X_pix.shape[1] != 2:
-        raise ValueError(f"Expected X_pix to have shape[1]=2")
-
-    X_pix_center = X_pix + 0.5
-    X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
-
-    A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
-                         X_hom[:,1,0] * X_hom[:,0,1],
-                         X_hom[:,1,0] * X_hom[:,0,2],
-                         X_hom[:,1,1] * X_hom[:,0,0],
-                         X_hom[:,1,1] * X_hom[:,0,1],
-                         X_hom[:,1,1] * X_hom[:,0,2],
-                         X_hom[:,1,2] * X_hom[:,0,0],
-                         X_hom[:,1,2] * X_hom[:,0,1],
-                         X_hom[:,1,2] * X_hom[:,0,2]))
-    U, d, Vh = np.linalg.svd(A)
-    f = Vh[-1]
-    F = f.reshape(3, 3)
-
-    if make_rank_2 and np.linalg.matrix_rank(F) != 2:
-        U2, d2, Vh2 = np.linalg.svd(F)
-        F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
-
-    if not ret_A: return F
-    else: return F, A
-
 def get_theta(R):
     if (np.abs(R @ R.T - np.eye(3)) > 1e-4).any():
         raise ValueError(f"Expected R to be normal (R @ R.T must be approximately equal to eye(3))")
@@ -925,7 +897,7 @@ def get_theta(R):
     return theta
 
 def get_Theta(R_array):
-    Theta = np.zeros_like(R_array.shape[:2])
+    Theta = np.zeros(R_array.shape[:2])
     for j, R in enumerate(R_array):
         U, d, Vh = np.linalg.svd(R)
         R_rot = U @ Vh
@@ -950,14 +922,57 @@ def get_R(x, y):
         R = np.eye(3)
     return R
 
-def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
+def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=None, H=None):
+    if X_pix.shape[0] < 8:
+        raise ValueError(f"Expected X_pix to have shape[0]>=8")
+    if X_pix.shape[1] != 2:
+        raise ValueError(f"Expected X_pix to have shape[1]=2")
+    if normalize and (W is None or H is None):
+        raise ValueError(f"With normalize=True W and H have to be passed")
+
+    if not normalize:
+        X_pix_center = X_pix + 0.5
+    else:
+        r = W / H
+        X_pix_center = (X_pix + 0.5) / W - 0.5 * np.array([1.0, 1.0 / r])
+    X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
+
+    A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
+                         X_hom[:,1,0] * X_hom[:,0,1],
+                         X_hom[:,1,0] * X_hom[:,0,2],
+                         X_hom[:,1,1] * X_hom[:,0,0],
+                         X_hom[:,1,1] * X_hom[:,0,1],
+                         X_hom[:,1,1] * X_hom[:,0,2],
+                         X_hom[:,1,2] * X_hom[:,0,0],
+                         X_hom[:,1,2] * X_hom[:,0,1],
+                         X_hom[:,1,2] * X_hom[:,0,2]))
+    U, d, Vh = np.linalg.svd(A)
+    f = Vh[-1]
+    F = f.reshape(3, 3)
+
+    if make_rank_2 and np.linalg.matrix_rank(F) != 2:
+        U2, d2, Vh2 = np.linalg.svd(F)
+        F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
+
+    if not ret_A: return F
+    else: return F, A
+
+def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if X_pix.shape[1] != 2:
         raise ValueError(f"Expected X_pix to have shape[1]=2")
     
-    X_pix_center = X_pix + 0.5
+    if not normalized:
+        X_pix_center = X_pix + 0.5
+    else:
+        r = W / H
+        X_pix_center = (X_pix + 0.5) / W - 0.5 * np.array([1.0, 1.0 / r])
 
-    f = W / 2 / np.tan(phi_x / 2)
-    p_x, p_y = W / 2, H / 2
+    if not normalized:
+        f = W / 2 / np.tan(phi_x / 2)
+        p_x, p_y = W / 2, H / 2
+    else:
+        f = 1 / 2 / np.tan(phi_x / 2)
+        p_x, p_y = 0.0, 0.0
     K_ = np.array([[f, 0.0, p_x],
                    [0.0, f, p_y],
                    [0.0, 0.0, 1.0]])
@@ -1013,7 +1028,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False):
     if not ret_status: return X, C, Theta
     else: return X, C, Theta, status
 
-def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
+def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
     r = W / H
@@ -1033,7 +1048,7 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
         print(f'{k = }')
         i_subset = np.where(X_visible[:,i] * X_visible[:,j])[0]
         ij_subset = np.ix_(i_subset, [i, j])
-        F = fundamental_matrix(X_pix[ij_subset])
+        F = fundamental_matrix(X_pix[ij_subset], normalize=normalize, W=W, H=H)
 
         phi_x_array, h = np.linspace(0, np.pi, 53, retstep=True)
         phi_x_array = phi_x_array[1:-1]
@@ -1043,7 +1058,7 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
             E_array = np.full_like(phi_x_array, np.inf)
 
             for l, phi_x in enumerate(phi_x_array):
-                X_, C_, Theta_, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True)
+                X_, C_, Theta_, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
                 if success:
                     E_array[l] = error(X_pix[ij_subset], transform(X_, C_, Theta_, phi_x, W, r))
 
@@ -1061,7 +1076,7 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True):
 
     return np.mean(phi_x_opt_array)
 
-def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0):
+def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
 
@@ -1115,8 +1130,8 @@ def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0):
                 continue
             if iter % 2 == 0: ij_subset = np.ix_(i_subset, [j, j+step])
             else: ij_subset = np.ix_(i_subset, [j+step, j])
-            F = fundamental_matrix(X_pix[ij_subset])
-            X_, C, Theta, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True)
+            F = fundamental_matrix(X_pix[ij_subset], normalize=normalize, W=W, H=H)
+            X_, C, Theta, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
             
             print(f'{success = }')
             if not success: continue
