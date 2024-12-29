@@ -1,6 +1,7 @@
 NAME = "cameramodel"
 
 import numpy as np
+from scipy.sparse.linalg import eigsh
 # import scipy.ndimage as ndimage
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
@@ -933,8 +934,9 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
     if not normalize:
         X_pix_center = X_pix + 0.5
     else:
-        r = W / H
-        X_pix_center = (X_pix + 0.5) / W - 0.5 * np.array([1.0, 1.0 / r])
+        # r = W / H
+        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
     A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
@@ -946,13 +948,16 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
                          X_hom[:,1,2] * X_hom[:,0,0],
                          X_hom[:,1,2] * X_hom[:,0,1],
                          X_hom[:,1,2] * X_hom[:,0,2]))
-    U, d, Vh = np.linalg.svd(A)
-    f = Vh[-1]
+    # U, d, Vh = np.linalg.svd(A)
+    # f = Vh[-1]
+    f = eigsh(A.T @ A, k=1, which='SM')[-1]    # должно считаться быстрее, чем с np.linalg.svd(A)
     F = f.reshape(3, 3)
 
     if make_rank_2 and np.linalg.matrix_rank(F) != 2:
         U2, d2, Vh2 = np.linalg.svd(F)
-        F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
+        d2[-1] = 0.0
+        # F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
+        F = U2 @ np.diag(d2) @ Vh2
 
     if not ret_A: return F
     else: return F, A
@@ -965,16 +970,22 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
         X_pix_center = X_pix + 0.5
     else:
         r = W / H
-        X_pix_center = (X_pix + 0.5) / W - 0.5 * np.array([1.0, 1.0 / r])
+        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
 
     if not normalized:
-        f = W / 2 / np.tan(phi_x / 2)
+        # f = W / 2 / np.tan(phi_x / 2)
+        f_x = f_y = W / 2 / np.tan(phi_x / 2)
         p_x, p_y = W / 2, H / 2
     else:
-        f = 1 / 2 / np.tan(phi_x / 2)
-        p_x, p_y = 0.0, 0.0
-    K_ = np.array([[f, 0.0, p_x],
-                   [0.0, f, p_y],
+        # f = 1 / 2 / np.tan(phi_x / 2)
+        f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
+        p_x = p_y = 0.0
+    # K_ = np.array([[f, 0.0, p_x],
+    #                [0.0, f, p_y],
+    #                [0.0, 0.0, 1.0]])
+    K_ = np.array([[f_x, 0.0, p_x],
+                   [0.0, f_y, p_y],
                    [0.0, 0.0, 1.0]])
 
     P1 = np.column_stack((K_, np.zeros(3)))
@@ -1012,8 +1023,9 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
                            y1 * P1[2] - P1[1],
                            x2 * P2[2] - P2[0],
                            y2 * P2[2] - P2[1]))
-            U2, d2, Vh2 = np.linalg.svd(A)
-            x = Vh2[-1]
+            # U2, d2, Vh2 = np.linalg.svd(A)
+            # x = Vh2[-1]
+            x = eigsh(A.T @ A, k=1, which='SM')[-1].ravel()    # должно считаться быстрее, чем с np.linalg.svd(A)
             X[i] = x[:-1] / x[-1]
         
         C = np.vstack((np.zeros(3), - R.T @ t))
@@ -1028,7 +1040,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if not ret_status: return X, C, Theta
     else: return X, C, Theta, status
 
-def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True, normalize=False):
+def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
     r = W / H
@@ -1040,7 +1052,7 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True, normalize=False)
             i_size_matrix[i,j] = np.where(X_visible[:,i] * X_visible[:,j])[0].size
 
     std_matrix_ids = np.where(std_matrix >= min_std)
-    matrix_ids = np.argsort(std_matrix[std_matrix_ids] / 10.0 + i_size_matrix[std_matrix_ids])[::-1][:5]
+    matrix_ids = np.argsort(std_matrix[std_matrix_ids] / 10.0 + i_size_matrix[std_matrix_ids])[::-1][:attempts]
     i_ids, j_ids = std_matrix_ids[0][matrix_ids], std_matrix_ids[1][matrix_ids]
     
     phi_x_opt_array = np.zeros(i_ids.size)
@@ -1076,7 +1088,7 @@ def find_phi_x(X_pix, W, H, min_std=20.0, delete_outliers=True, normalize=False)
 
     return np.mean(phi_x_opt_array)
 
-def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0, normalize=False):
+def get_pair_subscenes(X_pix, phi_x, W, H, min_std, max_size=50, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
 
@@ -1156,13 +1168,13 @@ def get_pair_subscenes(X_pix, phi_x, W, H, max_size=50, min_std=20.0, normalize=
             Theta_pairs = Theta_pairs[::-1]
 
         j_subset_list.append(j_)
-        j_subset_all = np.sort(np.array([j for j_subset in j_subset_list for j in j_subset]))
+        j_subset_all = np.sort(np.concatenate([j_subset for j_subset in j_subset_list]))
         X_pairs_list.append(X_pairs)
         C_pairs_list.append(C_pairs)
         Theta_pairs_list.append(Theta_pairs)
         iter += 1
 
-    return j_subset_list, j_subset_all, X_pairs_list, C_pairs_list, Theta_pairs_list
+    return j_subset_list, X_pairs_list, C_pairs_list, Theta_pairs_list
 
 def get_C_Theta_weighted(C_pairs, Theta_pairs, errors, j_pairs_ids_array):
     K = j_pairs_ids_array.max() + 1
