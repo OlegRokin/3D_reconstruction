@@ -1,7 +1,7 @@
 NAME = "cameramodel"
 
 import numpy as np
-from scipy.sparse.linalg import eigsh
+# from scipy.sparse.linalg import eigsh
 # import scipy.ndimage as ndimage
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
@@ -86,7 +86,8 @@ def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
 def transform(X, C, Theta, phi_x, W, r, delete_back_points=True, delete_boundary_points=False):
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
     if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
-    X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
+    # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
+    X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r]))
     if delete_boundary_points:
         I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= W / r))
         X_model[I, J] = np.nan
@@ -156,8 +157,10 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     iters = 0
     E = np.zeros(max_iters)
     E_min, E_min_temp = np.inf, np.inf
-    patience_timer = patience
+    # patience_timer = patience
+    patience_timer = 0
     success_timer = patience
+    began_decreasing = False
     increased = False
     diff_timer = patience
 
@@ -182,7 +185,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         if phi_x_mask:
             tan_phi_x_2 = np.tan(phi_x / 2)
             f = W / 2 / tan_phi_x_2
-        X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
+        # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
+        X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
 
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
@@ -193,6 +197,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         else:
             if E[iters] < E_min:
                 E_min = E[iters]
+                began_decreasing = True
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
                 if patience_timer != patience:
                     patience_timer = patience
@@ -215,8 +220,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_Theta = r_Theta = np.zeros_like(Theta)
                             s_phi_x = r_phi_x = 0
             elif E[iters] > E_min:
-                # if increased and E[iters] / E_min > 1e2:
-                if increased and E[iters] > E_min:
+                if increased:
                     patience_timer = 0
                 if success_timer != patience:
                     success_timer = patience
@@ -225,7 +229,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 else:
                     print(f'{iters} : Decrease LR to {lr / factor}')
                     lr /= factor
-                    patience_timer = patience
+                    if began_decreasing: patience_timer = patience
                     X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
                     X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
                     Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
@@ -365,7 +369,7 @@ def glue_scenes(X_scenes, C_scenes, Theta_scenes, lr,
                         s_V = r_V = np.zeros_like(V)
                         s_Psi = r_Psi = np.zeros_like(Psi)
             elif E[iters] > E_min:
-                if increased and E[iters] / E_min > 1e2:
+                if increased and E[iters] > E_min:
                     patience_timer = 0
                 if success_timer != patience:
                     success_timer = patience
@@ -897,12 +901,15 @@ def get_theta(R):
     
     return theta
 
-def get_Theta(R_array):
+def get_Theta(R_array, orthogonalize=True):
     Theta = np.zeros(R_array.shape[:2])
     for j, R in enumerate(R_array):
-        U, d, Vh = np.linalg.svd(R)
-        R_rot = U @ Vh
-        Theta[j] = get_theta(R_rot)
+        if orthogonalize:
+            U, d, Vh = np.linalg.svd(R)
+            R_rot = U @ Vh
+            Theta[j] = get_theta(R_rot)
+        else:
+            Theta[j] = get_theta(R)
     return Theta
 
 def get_R(x, y):
@@ -934,8 +941,6 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
     if not normalize:
         X_pix_center = X_pix + 0.5
     else:
-        # r = W / H
-        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
         X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
@@ -948,16 +953,15 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
                          X_hom[:,1,2] * X_hom[:,0,0],
                          X_hom[:,1,2] * X_hom[:,0,1],
                          X_hom[:,1,2] * X_hom[:,0,2]))
-    # U, d, Vh = np.linalg.svd(A)
-    # f = Vh[-1]
-    f = eigsh(A.T @ A, k=1, which='SM')[-1]    # должно считаться быстрее, чем с np.linalg.svd(A)
+    U, d, Vh = np.linalg.svd(A)
+    f = Vh[-1]
+    # f = eigsh(A.T @ A, k=1, which='SM')[1]    # вроде иногда должно считаться быстрее, чем с np.linalg.svd(A)
     F = f.reshape(3, 3)
 
     if make_rank_2 and np.linalg.matrix_rank(F) != 2:
-        U2, d2, Vh2 = np.linalg.svd(F)
-        d2[-1] = 0.0
-        # F = U2 @ np.diag(np.concatenate((d2[:-1], [0.0]))) @ Vh2
-        F = U2 @ np.diag(d2) @ Vh2
+        U, d, Vh = np.linalg.svd(F)
+        d[-1] = 0.0
+        F = U @ np.diag(d) @ Vh
 
     if not ret_A: return F
     else: return F, A
@@ -969,7 +973,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if not normalized:
         X_pix_center = X_pix + 0.5
     else:
-        r = W / H
+        # r = W / H
         # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
         X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
 
@@ -979,6 +983,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
         p_x, p_y = W / 2, H / 2
     else:
         # f = 1 / 2 / np.tan(phi_x / 2)
+        r = W / H
         f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
         p_x = p_y = 0.0
     # K_ = np.array([[f, 0.0, p_x],
@@ -1015,18 +1020,30 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
 
         P2 = K_ @ np.column_stack((R, t))
 
-        X = np.zeros((X_pix_center.shape[0], 3))
-        for i in range(X.shape[0]):
-            x1, y1 = X_pix_center[i,0,:]
-            x2, y2 = X_pix_center[i,1,:]
-            A = np.vstack((x1 * P1[2] - P1[0],
-                           y1 * P1[2] - P1[1],
-                           x2 * P2[2] - P2[0],
-                           y2 * P2[2] - P2[1]))
-            # U2, d2, Vh2 = np.linalg.svd(A)
-            # x = Vh2[-1]
-            x = eigsh(A.T @ A, k=1, which='SM')[-1].ravel()    # должно считаться быстрее, чем с np.linalg.svd(A)
-            X[i] = x[:-1] / x[-1]
+        # X = np.zeros((X_pix_center.shape[0], 3))
+        # for i in range(X.shape[0]):
+        #     x1, y1 = X_pix_center[i,0,:]
+        #     x2, y2 = X_pix_center[i,1,:]
+        #     A = np.vstack((x1 * P1[2,:] - P1[0,:],
+        #                    y1 * P1[2,:] - P1[1,:],
+        #                    x2 * P2[2,:] - P2[0,:],
+        #                    y2 * P2[2,:] - P2[1,:]))
+        #     U2, d2, Vh2 = np.linalg.svd(A)
+        #     x = Vh2[-1]
+        #     # # x = eigsh(A.T @ A, k=1, which='SM')[1].ravel()    # иногда должно считаться быстрее, чем с np.linalg.svd(A)
+        #     X[i] = x[:-1] / x[-1]
+        #     # A_1, A_2 = A[:,-1], A[:,:-1]
+        #     # X[i] = - np.linalg.solve(A_2.T @ A_2, A_2.T @ A_1)    # вроде считает нормально
+        X1, Y1 = X_pix_center[:,0,:].T
+        X2, Y2 = X_pix_center[:,1,:].T
+        A_array = np.stack((X1[:,np.newaxis] * P1[2,:] - P1[0,:],
+                            Y1[:,np.newaxis] * P1[2,:] - P1[1,:],
+                            X2[:,np.newaxis] * P2[2,:] - P2[0,:],
+                            Y2[:,np.newaxis] * P2[2,:] - P2[1,:]), axis=1)
+        A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
+        lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        X = - np.linalg.solve(lstsq_mat, lstsq_vec)
         
         C = np.vstack((np.zeros(3), - R.T @ t))
 
@@ -1068,11 +1085,24 @@ def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize
         E_diff = np.inf
         while E_diff > 1e-5:
             E_array = np.full_like(phi_x_array, np.inf)
-
-            for l, phi_x in enumerate(phi_x_array):
+            X_test, C_test, Theta_test, phi_x_test = [], [], [], []
+            for phi_x in phi_x_array:
                 X_, C_, Theta_, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
                 if success:
-                    E_array[l] = error(X_pix[ij_subset], transform(X_, C_, Theta_, phi_x, W, r))
+                    X_test.append(X_)
+                    C_test.append(C_[1,:])
+                    Theta_test.append(Theta_[1,:])
+                    phi_x_test.append(phi_x)
+            X_test, C_test, Theta_test, phi_x_test = np.array(X_test), np.array(C_test), np.array(Theta_test), np.array(phi_x_test)
+            R_test = ryxz(Theta_test)
+            X_test_rot = np.zeros((*X_test.shape[:2], 2, 3))
+            X_test_rot[:,:,0,:] = X_test
+            X_test_rot[:,:,1,:] = np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
+            X_model_test = W / 2 * (X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] / np.tan(phi_x_test / 2)[:,np.newaxis,np.newaxis,np.newaxis] \
+                                    + np.array([1.0, 1.0 / r]))
+            X_pix_center = X_pix[ij_subset] + 0.5
+            X_diff = X_model_test - X_pix_center
+            E_array = np.sum(X_diff**2, axis=(1, 2, 3)) / (4 * i_subset.size)   # 2 * N * K = 2 * i_subset.size * 2
 
             phi_x_opt = phi_x_array[np.argmin(E_array)]
             print(f'{phi_x_opt = }')
@@ -1099,19 +1129,34 @@ def get_pair_subscenes(X_pix, phi_x, W, H, min_std, max_size=50, normalize=False
     Theta_pairs_list = []
 
     iter = 0
+    finish = False
     while j_subset_all.size < max_size:
         X_pairs = []
         C_pairs = []
         Theta_pairs = []
 
-        if iter >= 2:
-            j_diff = j_subset_all[1:] - j_subset_all[:-1]
-            idx = np.where(j_diff > 2)[0]
-            idx = np.concatenate((idx, [idx[-1] + 1]))
-            j_subset_all_ = j_subset_all[idx]
+        if iter >= 2:            
             if iter % 2 == 0:
-                j = (j_subset_all_[0] + j_subset_all_[1]) // 2
-            else: j = (j_subset_all_[-1] + j_subset_all_[-2]) // 2
+                id_1, id_2 = 0, 1
+                j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
+                while j_2 - j_1 < 2:
+                    id_1 += 1
+                    id_2 += 1
+                    if id_2 > j_subset_all.size - 1:
+                        finish = True
+                    j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
+                j = int(np.floor((j_1 + j_2) / 2))
+            else:
+                id_1, id_2 = j_subset_all.size - 1, j_subset_all.size - 2
+                j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
+                while j_1 - j_2 < 2:
+                    id_1 -= 1
+                    id_2 -= 1
+                    if id_1 < 0:
+                        finish = True
+                    j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
+                j = int(np.ceil((j_1 + j_2) / 2))
+            if finish: break
         else:
             if iter == 0: j = 0
             else: j = K - 1
@@ -1123,7 +1168,7 @@ def get_pair_subscenes(X_pix, phi_x, W, H, min_std, max_size=50, normalize=False
             if success:
                 j_.append(j)
                 step = 0
-            while std < min_std:
+            while std < min_std or np.isnan(std):
                 if iter % 2 == 0: step += 1
                 else: step -= 1
                 if (iter % 2 == 0 and j + step >= K - 1) or (iter % 2 == 1 and j + step <= 0):
