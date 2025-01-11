@@ -161,7 +161,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     patience_timer = 0
     success_timer = patience
     began_decreasing = False
-    increased = False
+    # increased = False
     diff_timer = patience
 
     R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
@@ -197,31 +197,31 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         else:
             if E[iters] < E_min:
                 E_min = E[iters]
-                began_decreasing = True
+                if not began_decreasing: began_decreasing = True
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
                 if patience_timer != patience:
                     patience_timer = patience
-                if not increased:
-                    if success_timer > 0:
-                        success_timer -= 1
-                    else:
-                        print(f'{iters} : Icrease LR to {lr * factor}')
-                        lr *= factor
-                        success_timer = patience
-                        increased = True
-                        if optimizer == 'Adam':
-                            E_min_temp = E_min
-                            s_X_temp, r_X_temp = s_X.copy(), r_X.copy()
-                            s_C_temp, r_C_temp = s_C.copy(), r_C.copy()
-                            s_Theta_temp, r_Theta_temp = s_Theta.copy(), r_Theta.copy()
-                            s_phi_x_temp, r_phi_x_temp = s_phi_x, r_phi_x
-                            s_X = r_X = np.zeros_like(X)
-                            s_C = r_C = np.zeros_like(C)
-                            s_Theta = r_Theta = np.zeros_like(Theta)
-                            s_phi_x = r_phi_x = 0
+                # if not increased:
+                if success_timer > 0:
+                    success_timer -= 1
+                else:
+                    print(f'{iters} : Icrease LR to {lr * factor}')
+                    lr *= factor
+                    success_timer = patience
+                    # increased = True
+                    E_min_temp = E_min
+                    if optimizer == 'Adam':
+                        s_X_temp, r_X_temp = s_X.copy(), r_X.copy()
+                        s_C_temp, r_C_temp = s_C.copy(), r_C.copy()
+                        s_Theta_temp, r_Theta_temp = s_Theta.copy(), r_Theta.copy()
+                        s_phi_x_temp, r_phi_x_temp = s_phi_x, r_phi_x
+                        s_X = r_X = np.zeros_like(X)
+                        s_C = r_C = np.zeros_like(C)
+                        s_Theta = r_Theta = np.zeros_like(Theta)
+                        s_phi_x = r_phi_x = 0
             elif E[iters] > E_min:
-                if increased:
-                    patience_timer = 0
+                # if increased:
+                #     patience_timer = 0
                 if success_timer != patience:
                     success_timer = patience
                 if patience_timer > 0:
@@ -238,10 +238,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     if phi_x_mask:
                         tan_phi_x_2 = np.tan(phi_x / 2)
                         f = W / 2 / tan_phi_x_2
-                    X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
+                    # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
+                    X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
                     X_diff = np.nan_to_num(X_model - X_pix_center)
                     if optimizer == 'Adam':
-                        if not increased or (increased and E_min_temp > E_min):
+                        # if not increased or (increased and E_min_temp > E_min):
+                        if E_min_temp > E_min:
                             s_X = r_X = np.zeros_like(X)
                             s_C = r_C = np.zeros_like(C)
                             s_Theta = r_Theta = np.zeros_like(Theta)
@@ -251,7 +253,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_C, r_C = s_C_temp.copy(), r_C_temp.copy()
                             s_Theta, r_Theta = s_Theta_temp.copy(), r_Theta_temp.copy()
                             s_phi_x, r_phi_x = s_phi_x_temp, r_phi_x_temp
-                    increased = False
+                    # increased = False
             if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
                 if diff_timer > 0:
                     diff_timer -= 1
@@ -1057,7 +1059,7 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if not ret_status: return X, C, Theta
     else: return X, C, Theta, status
 
-def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize=False):
+def find_phi_x(X_pix, W, H, attempts=5, delete_outliers=True, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
     r = W / H
@@ -1067,6 +1069,8 @@ def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize
         for j in range(i + 1, K):
             std_matrix[i,j] = np.linalg.norm(np.nanstd(X_pix[:,i,:] - X_pix[:,j,:], axis=0))
             i_size_matrix[i,j] = np.where(X_visible[:,i] * X_visible[:,j])[0].size
+
+    min_std = np.nanpercentile(std_matrix, 25)
 
     std_matrix_ids = np.where(std_matrix >= min_std)
     matrix_ids = np.argsort(std_matrix[std_matrix_ids] / 10.0 + i_size_matrix[std_matrix_ids])[::-1][:attempts]
@@ -1086,13 +1090,14 @@ def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize
         while E_diff > 1e-5:
             E_array = np.full_like(phi_x_array, np.inf)
             X_test, C_test, Theta_test, phi_x_test = [], [], [], []
-            for phi_x in phi_x_array:
+            for phi_x in phi_x_array[(phi_x_array > 0.0) & (phi_x_array < np.pi)]:
                 X_, C_, Theta_, success = get_scene_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
                 if success:
                     X_test.append(X_)
                     C_test.append(C_[1,:])
                     Theta_test.append(Theta_[1,:])
                     phi_x_test.append(phi_x)
+            if not X_test: break
             X_test, C_test, Theta_test, phi_x_test = np.array(X_test), np.array(C_test), np.array(Theta_test), np.array(phi_x_test)
             R_test = ryxz(Theta_test)
             X_test_rot = np.zeros((*X_test.shape[:2], 2, 3))
@@ -1104,7 +1109,7 @@ def find_phi_x(X_pix, W, H, min_std, attempts=5, delete_outliers=True, normalize
             X_diff = X_model_test - X_pix_center
             E_array = np.sum(X_diff**2, axis=(1, 2, 3)) / (4 * i_subset.size)   # 2 * N * K = 2 * i_subset.size * 2
 
-            phi_x_opt = phi_x_array[np.argmin(E_array)]
+            phi_x_opt = phi_x_array[(phi_x_array > 0.0) & (phi_x_array < np.pi)][np.argmin(E_array)]
             print(f'{phi_x_opt = }')
             phi_x_array, h = np.linspace(phi_x_opt - h, phi_x_opt + h, 51, retstep=True)
             E_diff = np.nan_to_num(E_array.max() - E_array.min())
