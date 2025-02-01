@@ -6,9 +6,10 @@ import numpy as np
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
 import matplotlib.patches as patches
-from matplotlib.collections import LineCollection
+from matplotlib.collections import LineCollection, PolyCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from matplotlib.widgets import Slider
+from matplotlib.image import imread
 
 def error(X_pix, X_model):
     X_visible = ~np.isnan(X_pix)[:,:,0]
@@ -819,9 +820,17 @@ def normalize_scene(X, C, main_indexes=None, R_scale=1.0, ret_j=False):
 #         for j in range(C.shape[0]):
 #             ax.text(*C[j,:], f'c{j}')
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_scale=10.0, f=0.2,
-                     trajectory_markers=False, show_image_lines=False, show_image_traces=False,
+def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_paths=None,
+                     dist_scale=10.0, f=0.2, trajectory_markers=False, show_image_lines=False,
                      axis_off=False, grid_off=False, ret_axis=False):
+    if X_pix.shape[0] != X.shape[0]:
+        raise ValueError('Expected X_pix.shape[0] == X.shape[0]')
+    if X_pix.shape[1] != C.shape[0]:
+        raise ValueError('Expected X_pix.shape[1] == C.shape[0]')
+    if image_paths is not None:
+        if image_paths.size != X_pix.shape[1]:
+            raise ValueError('Expected image_paths.size == X_pix.shape[1]')
+
     assert isinstance(j_slider, Slider)
 
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
@@ -840,6 +849,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     ax0.set_zlabel('y')
     if axis_off: ax0.set_axis_off()
     if grid_off: ax0.grid(False)
+
+    N = X.shape[0]
 
     R = ryxz(Theta[j_slider.val].reshape(1, -1))[0]
     camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
@@ -863,12 +874,15 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
 
     X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
                         delete_back_points=True, delete_boundary_points=True)[:,0,:]
-    if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
-    else: X_visible = ~np.isnan(X_pix[:,j_slider.val,0])
-    I_visible = np.where(X_visible == True)[0]
-    X_visible_points = ax0.scatter(*X_show[I_visible,:].T, marker='o', s=16, color='red', depthshade=False)
-    I_not_visible = np.where(X_visible == False)[0]
-    X_not_visible_points = ax0.scatter(*X_show[I_not_visible,:].T,  marker='o', s=12, color='red', depthshade=False, alpha=0.5)
+    I_pix_visible = np.where(~np.isnan(X_pix[:,j_slider.val,0]))[0]
+    I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
+    I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
+    I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
+    # задавать alpha нормально не получается, возникают баги
+    X_visible_points = ax0.scatter(*X_show[I_model_visible,:].T, marker='o', s=16, color='red', depthshade=False)
+    I_model_not_visible = np.array(list(set(np.arange(N)) - set(I_model_visible)), dtype=np.int64)
+    X_not_visible_points = ax0.scatter(*X_show[I_model_not_visible,:].T,  marker='o', s=12, color='red', depthshade=False, alpha=0.5)
+
     if not trajectory_markers:
         ax0.plot(*C_show.T, color='blue')
     else:
@@ -876,12 +890,15 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
     C_current_point = ax0.scatter(*C_show[j_slider.val,:], marker='o', s=16, color='blue', depthshade=False)
 
     if show_image_lines:
-        X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
+        X_proj = project(X[I_model_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
         X_proj_show = rotate_array(X_proj, Ryz)
 
-        X_proj_traces = Line3DCollection(np.stack((X_show[I_visible], X_proj_show), axis=1),
+        X_proj_traces = Line3DCollection(np.stack((X_show[I_both_visible], X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]), axis=1),
                                          linewidth=1.0, colors='red', alpha=0.5)
         ax0.add_collection(X_proj_traces)
+        X_proj_semitraces = Line3DCollection(np.stack((X_show[I_model_semivisible], X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]), axis=1),
+                                             linewidth=1.0, colors='red', linestyle='--', alpha=0.5)
+        ax0.add_collection(X_proj_semitraces)
         X_proj_points = ax0.scatter(*X_proj_show.T, marker='o',  s=3, color='red', alpha=0.5)
 
     camera_dir_line, = ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
@@ -905,33 +922,42 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
 
     dist = distance(X, C, Theta)
     dist /= dist.max()
-    if not show_image_traces:
-        X_model_points = ax1.scatter(*X_model[I_visible,:].T, s=dist_scale/dist[I_visible,j_slider.val], marker='o', color='red', zorder=10)
+    X_model_points = ax1.scatter(*X_model[I_model_visible,:].T, s=dist_scale/dist[I_model_visible,j_slider.val],
+                                 marker='o', color='red', alpha=np.full(I_model_visible.size, 0.5)+0.5*np.isin(I_model_visible, I_both_visible), zorder=10)
 
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
         X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
+        pix_corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
+        X_pix_squares = PolyCollection(X_pix[:,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
+                                       linewidths=1.0, edgecolors='red', facecolor='none')
+        ax1.add_collection(X_pix_squares)
 
-        X_lines = LineCollection(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1),
+        X_lines = LineCollection(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1),
                                  color='red', linewidth=1.0, alpha=0.5)
         ax1.add_collection(X_lines)
 
-    def update(val):
-        X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
-                            delete_back_points=True, delete_boundary_points=True)[:,0,:]
-        if X_pix is None: X_visible = ~np.isnan(X_model[:,0])
-        else: X_visible = ~np.isnan(X_pix[:,j_slider.val,0])
-        I_visible = np.where(X_visible == True)[0]
-        I_not_visible = np.where(X_visible == False)[0]
+    if image_paths is not None:
+        img_show = ax1.imshow(imread(image_paths[j_slider.val]), extent=(0, W, H, 0), alpha=0.5)
 
-        X_visible_points._offsets3d = X_show[I_visible,:].T
-        X_not_visible_points._offsets3d = X_show[I_not_visible,:].T
+    def update(val):
         C_current_point._offsets3d = C_show[j_slider.val,:].reshape(-1, 1)
 
+        X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
+                            delete_back_points=True, delete_boundary_points=True)[:,0,:]
+        I_pix_visible = np.where(~np.isnan(X_pix[:,j_slider.val,0]))[0]
+        I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
+        I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
+        I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
+        I_model_not_visible = np.array(list(set(np.arange(N)) - set(I_model_visible)), dtype=np.int64)
+        X_visible_points._offsets3d = X_show[I_model_visible,:].T
+        X_not_visible_points._offsets3d = X_show[I_model_not_visible,:].T
+
         if show_image_lines:
-            X_proj = project(X[I_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
+            X_proj = project(X[I_model_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f)[:,0,:]
             X_proj_show = rotate_array(X_proj, Ryz)
-            X_proj_traces.set_segments(np.stack((X_show[I_visible], X_proj_show), axis=1))
+            X_proj_traces.set_segments(np.stack((X_show[I_both_visible], X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]), axis=1))
+            X_proj_semitraces.set_segments(np.stack((X_show[I_model_semivisible], X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]), axis=1))
             X_proj_points._offsets3d = X_proj_show.T
 
         R = ryxz(Theta[j_slider.val].reshape(1, -1))[0]
@@ -948,21 +974,33 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, dist_s
         center_to_corners.set_segments(np.stack((np.tile(C_show[j_slider.val,:], (4, 1)),
                                                  C_show[j_slider.val,:] + f * camera_corners_rot), axis=1))
         corners_surface.set_verts([C_show[j_slider.val,:] + f * camera_corners_rot])
-        
-        X_model_points.set_offsets(X_model[I_visible,:])
-        X_model_points.set_sizes(dist_scale/dist[I_visible,j_slider.val])
+
+        X_model_points.set_offsets(X_model[I_model_visible,:])
+        X_model_points.set_sizes(dist_scale/dist[I_model_visible,j_slider.val])
+        X_model_points.set_alpha(np.full(I_model_visible.size, 0.5) + 0.5 * np.isin(I_model_visible, I_both_visible))
         if X_pix is not None:
             X_pix_center = X_pix[:,j_slider.val,:] + 0.5
             X_pix_points.set_offsets(X_pix_center)
-            X_lines.set_segments(np.stack((X_model[I_visible,:], X_pix_center[I_visible,:]), axis=1))
-        
+            X_pix_squares.set_verts(X_pix[:,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
+            X_lines.set_segments(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1))
+        if image_paths is not None:
+            img_show.set_array(imread(image_paths[j_slider.val]))
+
     j_slider.on_changed(update)
 
     if ret_axis: return ax0, ax1
 
 def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H, X_pix,
-                 j_ids, dist_scale=10.0, f=0.2, trajectory_markers=False,
+                 j_ids, image_paths=None, dist_scale=10.0, f=0.2, trajectory_markers=False,
                  axis_off=False, grid_off=False, ret_axis=False):
+    if X_pix.shape[0] != X_array.shape[1]:
+        raise ValueError('Expected X_pix.shape[0] == X_array.shape[1]')
+    if X_pix.shape[1] != C_array.shape[1]:
+        raise ValueError('Expected X_pix.shape[1] == C_array.shape[1]')
+    if image_paths is not None:
+        if image_paths.size != 3:
+            raise ValueError('Expected image_paths to have size 3')
+
     assert isinstance(t_slider, Slider)
 
     gs = fig.add_gridspec(nrows=3, ncols=2)
@@ -1044,6 +1082,8 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
     X_pix_points, X_model_points, X_lines = 3 * [None], 3 * [None], 3 * [None]
     for j, ax in enumerate(axs):
         assert isinstance(ax, Axes)
+        if image_paths is not None:
+            ax.imshow(imread(image_paths[j]), extent=(0, W, H, 0), alpha=0.5)
         X_pix_points[j] = ax.scatter(*X_pix_center[:,j,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
         X_model_points[j] = ax.scatter(*X_model[I_model_visible,j,:].T, s=dist_scale/dist[I_model_visible,j], marker='o', color='red', zorder=10)
         X_lines[j] = LineCollection(np.stack((X_model[I_both_visible,j,:], X_pix_center[I_both_visible,j,:]), axis=1),
@@ -1092,32 +1132,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     if ret_axis: return ax0, axs
 
-# def get_theta(R):
-#     if (np.abs(R @ R.T - np.eye(3)) > 1e-4).any():
-#         raise ValueError(f"Expected R to be normal (R @ R.T must be approximately equal to eye(3))")
-#     if np.abs(np.linalg.det(R) - 1.0) > 1e-4:
-#         raise ValueError(f"Expected R to have determinant approximately 1.0")
-
-#     for l in range(2):
-#         if l == 0:
-#             c_x = np.sqrt(R[1,0]**2 + R[1,1]**2)
-#         if l == 1:
-#             c_x = - np.sqrt(R[1,0]**2 + R[1,1]**2)
-#         s_x = - R[1,2]
-#         c_y, s_y = R[[2,0],2] / c_x
-#         c_z, s_z = R[1,[1,0]] / c_x
-#         theta_x = np.arctan2(s_x, c_x)
-#         theta_y = np.arctan2(s_y, c_y)
-#         theta_z = np.arctan2(s_z, c_z)
-#         theta = np.array([theta_x, theta_y, theta_z])
-
-#         if np.linalg.norm(R - ryxz(theta.reshape(1, -1))[0]) <= 1e-10:
-#             break
-#         else:
-#             print('Weird in get_theta')
-    
-#     return theta
-
 def get_Theta(R):
     if (np.abs(np.einsum('jkl,jkn->jln', R, R) - np.eye(3)) > 1e-9).any():
         raise ValueError('Expected R[i] to be normal for all i (R[i] @ R[i].T must be approximately equal to eye(3))')
@@ -1130,14 +1144,6 @@ def get_Theta(R):
     C_z, S_z = R[:,1,1] / C_x, R[:,1,0] / C_x
     Theta = np.column_stack((np.arctan2(S_x, C_x), np.arctan2(S_y, C_y), np.arctan2(S_z, C_z)))
     return Theta
-
-# def get_Theta_orth(R_array):
-#     Theta = np.zeros(R_array.shape[:2])
-#     for j, R in enumerate(R_array):
-#         U, d, Vh = np.linalg.svd(R)
-#         R_rot = U @ Vh
-#         Theta[j] = get_theta(R_rot)
-#     return Theta
 
 def get_Theta_orth(R_array):
     Theta = np.zeros(R_array.shape[:2])
@@ -1176,7 +1182,9 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
     if not normalize:
         X_pix_center = X_pix + 0.5
     else:
-        X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
+        # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
+        r = W / H
+        X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
     A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
@@ -1208,22 +1216,18 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if not normalized:
         X_pix_center = X_pix + 0.5
     else:
-        # r = W / H
-        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
-        X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
+        r = W / H
+        X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
 
     if not normalized:
-        # f = W / 2 / np.tan(phi_x / 2)
         f_x = f_y = W / 2 / np.tan(phi_x / 2)
         p_x, p_y = W / 2, H / 2
     else:
-        # f = 1 / 2 / np.tan(phi_x / 2)
-        r = W / H
-        f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
+        # r = W / H
+        # f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
+        f_x = f_y = 1 / 2 / np.tan(phi_x / 2)
         p_x = p_y = 0.0
-    # K_ = np.array([[f, 0.0, p_x],
-    #                [0.0, f, p_y],
-    #                [0.0, 0.0, 1.0]])
     K_ = np.array([[f_x, 0.0, p_x],
                    [0.0, f_y, p_y],
                    [0.0, 0.0, 1.0]])
@@ -1255,20 +1259,6 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
 
         P2 = K_ @ np.column_stack((R, t))
 
-        # X = np.zeros((X_pix_center.shape[0], 3))
-        # for i in range(X.shape[0]):
-        #     x1, y1 = X_pix_center[i,0,:]
-        #     x2, y2 = X_pix_center[i,1,:]
-        #     A = np.vstack((x1 * P1[2,:] - P1[0,:],
-        #                    y1 * P1[2,:] - P1[1,:],
-        #                    x2 * P2[2,:] - P2[0,:],
-        #                    y2 * P2[2,:] - P2[1,:]))
-        #     U2, d2, Vh2 = np.linalg.svd(A)
-        #     x = Vh2[-1]
-        #     # # x = eigsh(A.T @ A, k=1, which='SM')[1].ravel()    # иногда должно считаться быстрее, чем с np.linalg.svd(A)
-        #     X[i] = x[:-1] / x[-1]
-        #     # A_1, A_2 = A[:,-1], A[:,:-1]
-        #     # X[i] = - np.linalg.solve(A_2.T @ A_2, A_2.T @ A_1)    # вроде считает нормально
         X1, Y1 = X_pix_center[:,0,:].T
         X2, Y2 = X_pix_center[:,1,:].T
         A_array = np.stack((X1[:,np.newaxis] * P1[2,:] - P1[0,:],
@@ -1282,7 +1272,6 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
         
         C = np.vstack((np.zeros(3), - R.T @ t))
 
-        # theta = get_theta(R.T)
         theta = get_Theta(R.T.reshape(1, 3, 3))[0]
         Theta = np.vstack((np.zeros(3), theta))
 
