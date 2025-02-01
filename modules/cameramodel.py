@@ -1183,8 +1183,9 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
         X_pix_center = X_pix + 0.5
     else:
         # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
-        r = W / H
-        X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        # r = W / H
+        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
     A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
@@ -1216,9 +1217,10 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if not normalized:
         X_pix_center = X_pix + 0.5
     else:
-        r = W / H
-        X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
         # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
+        # r = W / H
+        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
 
     if not normalized:
         f_x = f_y = W / 2 / np.tan(phi_x / 2)
@@ -1226,7 +1228,8 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     else:
         # r = W / H
         # f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
-        f_x = f_y = 1 / 2 / np.tan(phi_x / 2)
+        # f_x = f_y = 1 / 2 / np.tan(phi_x / 2)
+        f_x = f_y = W / max(W, H) / 2 / np.tan(phi_x / 2)
         p_x = p_y = 0.0
     K_ = np.array([[f_x, 0.0, p_x],
                    [0.0, f_y, p_y],
