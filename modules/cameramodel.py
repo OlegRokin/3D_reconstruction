@@ -150,22 +150,20 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         tan_phi_x_2 = np.tan(phi_x / 2)
         f = W / 2 / tan_phi_x_2
 
-    s_X = r_X = np.zeros_like(X)
-    s_C = r_C = np.zeros_like(C)
-    s_Theta = r_Theta = np.zeros_like(Theta)
-    s_phi_x = r_phi_x = 0
+    if optimizer == 'Adam':
+        s_X = r_X = np.zeros_like(X)
+        s_C = r_C = np.zeros_like(C)
+        s_Theta = r_Theta = np.zeros_like(Theta)
+        s_phi_x = r_phi_x = 0
+        t = 1
     
     iters = 0
     E = np.zeros(max_iters)
     E_min, E_min_temp = np.inf, np.inf
-    # patience_timer = patience
     patience_timer = 0
     success_timer = patience
     began_decreasing = False
     increased = False
-    # diff_timer = patience
-
-    # R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
     if ret_arrays:
         X_list, C_list, Theta_list, phi_x_list = [], [], [], []
@@ -180,29 +178,28 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
 
         Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
-        if iters == 0: R = Ry @ Rx @ Rz
+        if iters == 0 and X_mask: R = Ry @ Rx @ Rz
+        elif not X_mask: R = Ry @ Rx @ Rz
         X_rot = np.einsum('jlk,ijl->ijk', R, X_tr)
 
         if phi_x_mask:
             tan_phi_x_2 = np.tan(phi_x / 2)
             f = W / 2 / tan_phi_x_2
-        # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
         X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
 
         X_diff = np.nan_to_num(X_model - X_pix_center)
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         
-        # if iters % print_step == 0: print(f'{iters} : {E[iters]}')
         if iters == 0:
             E_min = E[iters]
         else:
             if E[iters] < E_min:
                 E_min = E[iters]
-                if not began_decreasing: began_decreasing = True
+                if not began_decreasing:
+                    began_decreasing = True
                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
                 if patience_timer != patience:
                     patience_timer = patience
-                # if not increased:
                 if success_timer > 0:
                     success_timer -= 1
                 else:
@@ -216,10 +213,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                         s_C_temp, r_C_temp = s_C.copy(), r_C.copy()
                         s_Theta_temp, r_Theta_temp = s_Theta.copy(), r_Theta.copy()
                         s_phi_x_temp, r_phi_x_temp = s_phi_x, r_phi_x
+                        t_temp = t
                         s_X = r_X = np.zeros_like(X)
                         s_C = r_C = np.zeros_like(C)
                         s_Theta = r_Theta = np.zeros_like(Theta)
                         s_phi_x = r_phi_x = 0
+                        t = 1
             elif E[iters] > E_min:
                 if increased:
                     patience_timer = 0
@@ -240,7 +239,6 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                     if phi_x_mask:
                         tan_phi_x_2 = np.tan(phi_x / 2)
                         f = W / 2 / tan_phi_x_2
-                    # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
                     X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
                     X_diff = np.nan_to_num(X_model - X_pix_center)
                     if optimizer == 'Adam':
@@ -250,17 +248,14 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_C = r_C = np.zeros_like(C)
                             s_Theta = r_Theta = np.zeros_like(Theta)
                             s_phi_x = r_phi_x = 0
+                            t = 1
                         else:
                             s_X, r_X = s_X_temp.copy(), r_X_temp.copy()
                             s_C, r_C = s_C_temp.copy(), r_C_temp.copy()
                             s_Theta, r_Theta = s_Theta_temp.copy(), r_Theta_temp.copy()
                             s_phi_x, r_phi_x = s_phi_x_temp, r_phi_x_temp
+                            t = t_temp
                             increased = False
-            # if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
-            #     if diff_timer > 0:
-            #         diff_timer -= 1
-            #     else:
-            #         break
             if iters > 2 * patience and E[:iters-2*patience].min() - E_min  < stop_diff:
                 # print(f'E[:{iters-2*patience}].min() - E_min = {E[:iters-2*patience].min() - E_min}')
                 break
@@ -268,6 +263,11 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             break
 
         if iters % print_step == 0: print(f'{iters} : {E_min}')
+        # print(f'{iters} : {E_min}, {E[iters]}, {C[0]}, {Theta[0]}, {X_diff}')
+        # print(f'{iters} : {E_min}, {E[iters]}, {C[0]}, {Theta[0]}, {np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)}')
+        # print(f"{iters} : {E_min}, {E[iters]}, {X[0]}, {C[0]}, {Theta[0]}, {D['E', 'X'][0]}, {D['E', 'C'][0]}, {D['E', 'Theta'][0]}")
+
+        if iters == max_iters - 1: break
 
         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
         D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
@@ -287,12 +287,8 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
 
         D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-        # if X_mask:
-        #     D['E', 'C'][main_indexes[0],:] = 0.0
 
         D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
-        # if X_mask:
-        #     D['E', 'Theta'][main_indexes[0],:] = 0.0
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - f / X_rot[:,:,2][:,:,np.newaxis] * X_rot[:,:,:2] / np.sin(phi_x)
@@ -307,11 +303,12 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                 phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
         elif optimizer == 'Adam':
             if X_mask:
-                X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=iters+1)
-            C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=iters+1)
-            Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=iters+1)
+                X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=t)
+            C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=t)
+            Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=t)
             if phi_x_mask:
-                phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=iters+1)
+                phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=t)
+            t += 1
 
         if X_mask:
             X, C, Theta, R = align_scene(X, C, Theta, ret_R=True)
