@@ -131,7 +131,7 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
     return x - lr * s_corr / (1e-8 + np.sqrt(r_corr)), s_new, r_new
 
 def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-        X_mask=True, phi_x_mask=True, main_indexes=[0, -1],
+        X_mask=True, phi_x_mask=True,
         optimizer='Adam', patience=1000, factor=2.0,
         stop_value=0.0, stop_diff=0.0, print_step=1000, ret_arrays=False):
     X_visible = ~np.isnan(X_pix)[:,:,0]
@@ -163,7 +163,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     success_timer = patience
     began_decreasing = False
     increased = False
-    diff_timer = patience
+    # diff_timer = patience
 
     # R_scale = np.linalg.norm(C[main_indexes[0],:] - C[main_indexes[1],:])
 
@@ -256,11 +256,14 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                             s_Theta, r_Theta = s_Theta_temp.copy(), r_Theta_temp.copy()
                             s_phi_x, r_phi_x = s_phi_x_temp, r_phi_x_temp
                             increased = False
-            if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
-                if diff_timer > 0:
-                    diff_timer -= 1
-                else:
-                    break
+            # if iters >= patience and np.abs(E[iters - patience] - E[iters]) <= stop_diff:
+            #     if diff_timer > 0:
+            #         diff_timer -= 1
+            #     else:
+            #         break
+            if iters > 2 * patience and E[:iters-2*patience].min() - E_min  < stop_diff:
+                # print(f'E[:{iters-2*patience}].min() - E_min = {E[:iters-2*patience].min() - E_min}')
+                break
         if E[iters] <= stop_value:
             break
 
@@ -315,6 +318,7 @@ def fit(X_pix, W, r, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             X, C = normalize_scene(X, C)
 
     print(f'{E_min = }')
+
     if not ret_arrays: return X_release, C_release, Theta_release, phi_x_release, E[E > 0]
     else: return X_release, C_release, Theta_release, phi_x_release, E[E > 0], np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list)
 
@@ -922,8 +926,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
 
     dist = distance(X, C, Theta)
     dist /= dist.max()
-    X_model_points = ax1.scatter(*X_model[I_model_visible,:].T, s=dist_scale/dist[I_model_visible,j_slider.val],
-                                 marker='o', color='red', alpha=np.full(I_model_visible.size, 0.5)+0.5*np.isin(I_model_visible, I_both_visible), zorder=10)
+    if I_model_visible.size > 0:
+        X_model_points = ax1.scatter(*X_model[I_model_visible,:].T, s=dist_scale/dist[I_model_visible,j_slider.val],
+                                     marker='o', color='red', alpha=np.full(I_model_visible.size, 0.5)+0.5*np.isin(I_model_visible, I_both_visible), zorder=10)
+    else:
+        X_model_points = ax1.scatter([], [], marker='o', color='red', zorder=10)
 
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
@@ -933,8 +940,11 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
                                        linewidths=1.0, edgecolors='red', facecolor='none')
         ax1.add_collection(X_pix_squares)
 
-        X_lines = LineCollection(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1),
-                                 color='red', linewidth=1.0, alpha=0.5)
+        if I_both_visible.size > 0:
+            X_lines = LineCollection(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1),
+                                     color='red', linewidth=1.0, alpha=0.5)
+        else:
+            X_lines = LineCollection([], color='red', linewidth=1.0, alpha=0.5)
         ax1.add_collection(X_lines)
 
     if image_paths is not None:
@@ -975,14 +985,23 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
                                                  C_show[j_slider.val,:] + f * camera_corners_rot), axis=1))
         corners_surface.set_verts([C_show[j_slider.val,:] + f * camera_corners_rot])
 
-        X_model_points.set_offsets(X_model[I_model_visible,:])
-        X_model_points.set_sizes(dist_scale/dist[I_model_visible,j_slider.val])
-        X_model_points.set_alpha(np.full(I_model_visible.size, 0.5) + 0.5 * np.isin(I_model_visible, I_both_visible))
+        if I_model_visible.size > 0:
+            X_model_points.set_visible(True)
+            X_model_points.set_offsets(X_model[I_model_visible,:])
+            X_model_points.set_sizes(dist_scale/dist[I_model_visible,j_slider.val])
+            X_model_points.set_alpha(np.full(I_model_visible.size, 0.5) + 0.5 * np.isin(I_model_visible, I_both_visible))
+        else:
+            X_model_points.set_visible(False)
+
         if X_pix is not None:
             X_pix_center = X_pix[:,j_slider.val,:] + 0.5
             X_pix_points.set_offsets(X_pix_center)
             X_pix_squares.set_verts(X_pix[:,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
-            X_lines.set_segments(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1))
+            if I_both_visible.size > 0:
+                X_lines.set_visible(True)
+                X_lines.set_segments(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1))
+            else:
+                X_lines.set_visible(False)
         if image_paths is not None:
             img_show.set_array(imread(image_paths[j_slider.val]))
 
