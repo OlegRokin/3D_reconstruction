@@ -166,7 +166,8 @@ def sphere_project(x, o, R):
 
 def sgd(x, grad_x, lr):
     # return x - lr * grad_x
-    return x - lr * grad_x,
+    # return x - lr * grad_x,
+    return x - lr * grad_x, {}
 
 
 def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
@@ -178,7 +179,8 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
     x_new = x - lr * s_corr / np.sqrt(r_corr)
     t_new = t + 1
     # return x_new, s_new, r_new
-    return x_new, s_new, r_new, t_new
+    # return x_new, s_new, r_new, t_new
+    return x_new, {'s': s_new, 'r': r_new, 't': t_new}
 
 
 # @enforce_integer_argument(2)
@@ -441,13 +443,16 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                 began_decreasing_ = True
 
             for key, val in params.items():
-                val['release'] = val['main']
+                val['release'] = val['main'].copy()
 
             if patience_timer_ != patience:
                 patience_timer_ = patience
             if success_timer_ > 0:
                 success_timer_ -= 1
             else:
+                # print(f"{params['phi_x']['gd'] = }")
+                # print(f"{params['phi_x']['gd_temp'] = }")
+
                 print(f'{iters_} : Icrease LR to {lr_ * factor}')
                 lr_ *= factor
                 success_timer_ = patience
@@ -458,6 +463,9 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                     for key2 in val1['gd']:
                         val1['gd_temp'][key2] = val1['gd'][key2].copy()
                         val1['gd'][key2] = val1['gd_init'][key2].copy()
+
+                # print(f"{params['phi_x']['gd'] = }")
+                # print(f"{params['phi_x']['gd_temp'] = }\n")
         
         elif E[iters] > E_min_:
             if increased_:
@@ -471,6 +479,10 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                 if began_decreasing_:
                     patience_timer_ = patience
                 else: iters_ -= 1
+
+                # print(f"{params['phi_x']['gd'] = }")
+                # print(f"{params['phi_x']['gd_temp'] = }")
+
                 print(f'{iters_} : Decrease LR to {lr_ / factor}')
                 lr_ /= factor
 
@@ -489,6 +501,9 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                         for key2 in val1['gd']:
                             val1['gd'][key2] = val1['gd_temp'][key2].copy()
                     increased_ = False
+
+                # print(f"{params['phi_x']['gd'] = }")
+                # print(f"{params['phi_x']['gd_temp'] = }\n")
 
     returns_tuple = (lr_, iters_, E_min_, E_min_temp_, patience_timer_, success_timer_, began_decreasing_, increased_)
     return returns_tuple, returns_list
@@ -549,23 +564,18 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     if phi_x_mask: params['phi_x']['main'] = phi_x
 
     for key, val in params.items():
-        val['release'] = val['main']
+        val['release'] = val['main'].copy()
 
     gd_func_dict = {'SGD': sgd, 'Adam': gd_adam}
 
     for key, val in params.items():
         val['gd'], val['gd_temp'], val['gd_init'] = dict(), dict(), dict()
 
-    # считаем, что в течение всего выполнения fit optimizer будет всегда один и тот же
-    # for key, val in params.items():
-    #     for name in gd_params_names[optimizer]:
-    #         val['gd'][name] = val['gd_temp'][name] = np.zeros_like(val['main'])
-    
     if optimizer == 'Adam':
         for key, val in params.items():
-            val['gd']['s'] = val['gd_temp']['s'] = val['gd_init']['s'] = np.zeros_like(val['main'])
-            val['gd']['r'] = val['gd_temp']['r'] = val['gd_init']['r'] = np.zeros_like(val['main'])
-            val['gd']['t'] = val['gd_temp']['t'] = val['gd_init']['t'] = np.array([1])
+            val['gd']['s'], val['gd_temp']['s'], val['gd_init']['s'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
+            val['gd']['r'], val['gd_temp']['r'], val['gd_init']['r'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
+            val['gd']['t'], val['gd_temp']['t'], val['gd_init']['t'] = np.array([1]), np.array([1]), np.array([1])
 
     E = np.zeros(max_iters)
     E_min, E_min_temp = np.inf, np.inf
@@ -582,7 +592,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     while iters < max_iters:
         if ret_arrays:
             for key, val in params.items():
-                val['list'].append(val['main'])
+                val['list'].append(val['main'].copy())
 
         calculate_R = (iters == 0 and X_mask) or not X_mask
         transform_kwargs = dict()
@@ -594,83 +604,6 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         if phi_x_mask: f = transorm_res_dict['f']
 
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
-        
-        # if iters == 0:
-        #     E_min = E[iters]
-        # else:
-        #     if E[iters] < E_min:
-        #         E_min = E[iters]
-        #         if not began_decreasing:
-        #             began_decreasing = True
-                
-        #         for key, val in params.items():
-        #             val['release'] = val['main']
-                
-        #         if patience_timer != patience:
-        #             patience_timer = patience
-        #         if success_timer > 0:
-        #             success_timer -= 1
-        #         else:
-        #             print(f'{iters} : Icrease LR to {lr * factor}')
-        #             lr *= factor
-        #             success_timer = patience
-        #             increased = True
-        #             E_min_temp = E_min
-
-        #             for key1, val1 in params.items():
-        #                 for key2 in val1['gd']:
-        #                     val1['gd_temp'][key2] = val1['gd'][key2].copy()
-        #                     val1['gd'][key2] = val1['gd_init'][key2].copy()
-
-        #     elif E[iters] > E_min:
-        #         if increased:
-        #             patience_timer = 0
-        #             iters -= 1
-        #         if success_timer != patience:
-        #             success_timer = patience
-        #         if patience_timer > 0:
-        #             patience_timer -= 1
-        #         else:
-        #             if began_decreasing:
-        #                 patience_timer = patience
-        #             else: iters -= 1
-        #             print(f'{iters} : Decrease LR to {lr / factor}')
-        #             lr /= factor
-                    
-        #             # print(f'{X[0] = }')
-        #             for key, val in params.items():
-        #                 # val['main'] = val['release']
-        #                 val['main'][:] = val['release']
-        #             # if X_mask: X = params['X']['main']
-        #             # C = params['C']['main']
-        #             # Theta = params['Theta']['main']
-        #             # if phi_x_mask: phi_x = params['phi_x']['main']
-        #             # print(f'{X[0] = }\n')
-                    
-        #             # в случае, если нужно по новой считать величины, обязательно нужно также по новой считать R (?)
-        #             # calculate_R = (iters == 0 and X_mask) or not X_mask
-        #             transform_kwargs = dict()
-        #             # if not calculate_R: transform_kwargs['R'] = R
-        #             if not phi_x_mask: transform_kwargs['f'] = f
-        #             results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
-        #             X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
-        #             # if calculate_R: R = results_dict['R']
-        #             R = results_dict['R']
-        #             if phi_x_mask: f = results_dict['f']
-                    
-        #             if not increased or (increased and E_min_temp > E_min):
-        #                 for key1, val1 in params.items():
-        #                     for key2 in val1['gd']:
-        #                         val1['gd'][key2] = val1['gd_init'][key2].copy()
-        #             else:
-        #                 for key1, val1 in params.items():
-        #                     for key2 in val1['gd']:
-        #                         val1['gd'][key2] = val1['gd_temp'][key2].copy()
-        #                 increased = False
-        #     if stop_diff > 0.0 and iters > 2 * patience:
-        #         E_prev_min = E[:iters-2*patience].min()
-        #         if E_prev_min - E_min > 0.0 and E_prev_min - E_min < stop_diff:
-        #             break
 
         transform_kwargs = dict()
         if not phi_x_mask: transform_kwargs['f'] = f
@@ -725,42 +658,54 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['X_model', 'phi_x'] = - f / np.sin(phi_x) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
             D['E', 'phi_x'] = np.array([np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())])      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
         
-        if X_mask:
-            results = gd_func_dict[optimizer](X, D['E', 'X'], lr, **params['X']['gd'])
-            X = results[0]
-            for i, key in enumerate(params['X']['gd']):
-                params['X']['gd'][key] = results[i+1]
+        # if X_mask:
+        #     results = gd_func_dict[optimizer](X, D['E', 'X'], lr, **params['X']['gd'])
+        #     X = results[0]
+        #     for i, key in enumerate(params['X']['gd']):
+        #         params['X']['gd'][key] = results[i+1]
         
-        results = gd_func_dict[optimizer](C, D['E', 'C'], lr, **params['C']['gd'])
-        C = results[0]
-        for i, key in enumerate(params['C']['gd']):
-            params['C']['gd'][key] = results[i+1]
+        # results = gd_func_dict[optimizer](C, D['E', 'C'], lr, **params['C']['gd'])
+        # C = results[0]
+        # for i, key in enumerate(params['C']['gd']):
+        #     params['C']['gd'][key] = results[i+1]
         
-        results = gd_func_dict[optimizer](Theta, D['E', 'Theta'], lr, **params['Theta']['gd'])
-        Theta = results[0]
-        for i, key in enumerate(params['Theta']['gd']):
-            params['Theta']['gd'][key] = results[i+1]
+        # results = gd_func_dict[optimizer](Theta, D['E', 'Theta'], lr, **params['Theta']['gd'])
+        # Theta = results[0]
+        # for i, key in enumerate(params['Theta']['gd']):
+        #     params['Theta']['gd'][key] = results[i+1]
         
-        if phi_x_mask:
-            results = gd_func_dict[optimizer](phi_x, D['E', 'phi_x'], lr, **params['phi_x']['gd'])
-            phi_x = results[0]
-            for i, key in enumerate(params['phi_x']['gd']):
-                params['phi_x']['gd'][key] = results[i+1]
+        # if phi_x_mask:
+        #     print(f'{phi_x = }')
+        #     results = gd_func_dict[optimizer](phi_x, D['E', 'phi_x'], lr, **params['phi_x']['gd'])
+        #     phi_x = results[0]
+        #     print(f'{phi_x = }')
+        #     for i, key in enumerate(params['phi_x']['gd']):
+        #         params['phi_x']['gd'][key] = results[i+1]
+
+        for key, val in params.items():
+            gd_result, gd_results_dict = gd_func_dict[optimizer](val['main'], D['E', key], lr, **val['gd'])
+            val['main'][:] = gd_result
+            for key1, val1 in val['gd'].items():
+                val1[:] = gd_results_dict[key1]
+
+        # if X_mask:
+        #     X, C, Theta, R = align_scene(X, C, Theta, ret_R=True)
+        #     X, C = normalize_scene(X, C)
+
+        # if X_mask: params['X']['main'] = X
+        # params['C']['main'] = C
+        # params['Theta']['main'] = Theta
+        # if phi_x_mask: params['phi_x']['main'] = phi_x
 
         if X_mask:
-            X, C, Theta, R = align_scene(X, C, Theta, ret_R=True)
-            X, C = normalize_scene(X, C)
-
-        if X_mask: params['X']['main'] = X
-        params['C']['main'] = C
-        params['Theta']['main'] = Theta
-        if phi_x_mask: params['phi_x']['main'] = phi_x
+            X[:], C[:], Theta[:], R = align_scene(X, C, Theta, ret_R=True)
+            X[:], C[:] = normalize_scene(X, C)
 
         iters += 1
 
     print(f'{E_min = }')
 
-    if phi_x_mask: params['phi_x']['main'] = phi_x[0]
+    if phi_x_mask: params['phi_x']['main'] = params['phi_x']['main'][0]
 
     returns = [*[val['main'] for key, val in params.items()], E[:iters+1]]
     if ret_arrays: returns.extend([np.array(val['list']) for key, val in params.items()])
