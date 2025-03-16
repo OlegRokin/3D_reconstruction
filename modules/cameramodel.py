@@ -425,6 +425,75 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
 #     return returns
 
 
+def lr_manager(lr, iters, E, E_min, E_min_temp,
+               patience_timer, success_timer, began_decreasing, increased,
+               patience, factor, params, func, func_args, func_kwargs):
+    returns_list = []
+
+    lr_, iters_, E_min_, E_min_temp_ = lr, iters, E_min, E_min_temp
+    patience_timer_, success_timer_, began_decreasing_, increased_ = patience_timer, success_timer, began_decreasing, increased
+    if iters_ == 0:
+        E_min_ = E[iters]
+    else:
+        if E[iters] < E_min_:
+            E_min_ = E[iters]
+            if not began_decreasing_:
+                began_decreasing_ = True
+
+            for key, val in params.items():
+                val['release'] = val['main']
+
+            if patience_timer_ != patience:
+                patience_timer_ = patience
+            if success_timer_ > 0:
+                success_timer_ -= 1
+            else:
+                print(f'{iters_} : Icrease LR to {lr_ * factor}')
+                lr_ *= factor
+                success_timer_ = patience
+                increased_ = True
+                E_min_temp_ = E_min_
+
+                for key1, val1 in params.items():
+                    for key2 in val1['gd']:
+                        val1['gd_temp'][key2] = val1['gd'][key2].copy()
+                        val1['gd'][key2] = val1['gd_init'][key2].copy()
+        
+        elif E[iters] > E_min_:
+            if increased_:
+                patience_timer_ = 0
+                iters_ -= 1
+            if success_timer_ != patience:
+                success_timer_ = patience
+            if patience_timer_ > 0:
+                patience_timer_ -= 1
+            else:
+                if began_decreasing_:
+                    patience_timer_ = patience
+                else: iters_ -= 1
+                print(f'{iters_} : Decrease LR to {lr_ / factor}')
+                lr_ /= factor
+
+                for key, val in params.items():
+                    val['main'][:] = val['release']
+
+                results = func(*func_args, **func_kwargs)
+                returns_list.append(results)
+
+                if not increased_ or (increased_ and E_min_temp_ > E_min_):
+                    for key1, val1 in params.items():
+                        for key2 in val1['gd']:
+                            val1['gd'][key2] = val1['gd_init'][key2].copy()
+                else:
+                    for key1, val1 in params.items():
+                        for key2 in val1['gd']:
+                            val1['gd'][key2] = val1['gd_temp'][key2].copy()
+                    increased_ = False
+
+    returns_tuple = (lr_, iters_, E_min_, E_min_temp_, patience_timer_, success_timer_, began_decreasing_, increased_)
+    return returns_tuple, returns_list
+
+
 @enforce_integer_argument(2)
 def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000, factor=2.0,
@@ -510,7 +579,6 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             val['list'] = []
 
     iters = 0
-    # for iters in range(max_iters):
     while iters < max_iters:
         if ret_arrays:
             for key, val in params.items():
@@ -520,86 +588,111 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         transform_kwargs = dict()
         if not calculate_R: transform_kwargs['R'] = R
         if not phi_x_mask: transform_kwargs['f'] = f
-        results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
-        X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
-        if calculate_R: R = results_dict['R']
-        if phi_x_mask: f = results_dict['f']
+        transorm_res_tuple, transorm_res_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
+        X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_tuple
+        if calculate_R: R = transorm_res_dict['R']
+        if phi_x_mask: f = transorm_res_dict['f']
 
         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
         
-        if iters == 0:
-            E_min = E[iters]
-        else:
-            if E[iters] < E_min:
-                E_min = E[iters]
-                if not began_decreasing:
-                    began_decreasing = True
+        # if iters == 0:
+        #     E_min = E[iters]
+        # else:
+        #     if E[iters] < E_min:
+        #         E_min = E[iters]
+        #         if not began_decreasing:
+        #             began_decreasing = True
                 
-                for key, val in params.items():
-                    val['release'] = val['main']
+        #         for key, val in params.items():
+        #             val['release'] = val['main']
                 
-                if patience_timer != patience:
-                    patience_timer = patience
-                if success_timer > 0:
-                    success_timer -= 1
-                else:
-                    print(f'{iters} : Icrease LR to {lr * factor}')
-                    lr *= factor
-                    success_timer = patience
-                    increased = True
-                    E_min_temp = E_min
+        #         if patience_timer != patience:
+        #             patience_timer = patience
+        #         if success_timer > 0:
+        #             success_timer -= 1
+        #         else:
+        #             print(f'{iters} : Icrease LR to {lr * factor}')
+        #             lr *= factor
+        #             success_timer = patience
+        #             increased = True
+        #             E_min_temp = E_min
 
-                    for key1, val1 in params.items():
-                        for key2 in val1['gd']:
-                            val1['gd_temp'][key2] = val1['gd'][key2].copy()
-                            val1['gd'][key2] = val1['gd_init'][key2].copy()
+        #             for key1, val1 in params.items():
+        #                 for key2 in val1['gd']:
+        #                     val1['gd_temp'][key2] = val1['gd'][key2].copy()
+        #                     val1['gd'][key2] = val1['gd_init'][key2].copy()
 
-            elif E[iters] > E_min:
-                if increased:
-                    patience_timer = 0
-                if success_timer != patience:
-                    success_timer = patience
-                if patience_timer > 0:
-                    patience_timer -= 1
-                else:
-                    if began_decreasing:
-                        patience_timer = patience
-                    else: iters -= 1
-                    print(f'{iters} : Decrease LR to {lr / factor}')
-                    lr /= factor
+        #     elif E[iters] > E_min:
+        #         if increased:
+        #             patience_timer = 0
+        #             iters -= 1
+        #         if success_timer != patience:
+        #             success_timer = patience
+        #         if patience_timer > 0:
+        #             patience_timer -= 1
+        #         else:
+        #             if began_decreasing:
+        #                 patience_timer = patience
+        #             else: iters -= 1
+        #             print(f'{iters} : Decrease LR to {lr / factor}')
+        #             lr /= factor
                     
-                    for key, val in params.items():
-                        # val['main'] = val['release']
-                        val['main'][:] = val['release']
-                    # if X_mask: X = params['X']['main']
-                    # C = params['C']['main']
-                    # Theta = params['Theta']['main']
-                    # if phi_x_mask: phi_x = params['phi_x']['main']
+        #             # print(f'{X[0] = }')
+        #             for key, val in params.items():
+        #                 # val['main'] = val['release']
+        #                 val['main'][:] = val['release']
+        #             # if X_mask: X = params['X']['main']
+        #             # C = params['C']['main']
+        #             # Theta = params['Theta']['main']
+        #             # if phi_x_mask: phi_x = params['phi_x']['main']
+        #             # print(f'{X[0] = }\n')
                     
-                    # в случае, если нужно по новой считать величины, обязательно нужно также по новой считать R (?)
-                    # calculate_R = (iters == 0 and X_mask) or not X_mask
-                    transform_kwargs = dict()
-                    # if not calculate_R: transform_kwargs['R'] = R
-                    if not phi_x_mask: transform_kwargs['f'] = f
-                    results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
-                    X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
-                    # if calculate_R: R = results_dict['R']
-                    R = results_dict['R']
-                    if phi_x_mask: f = results_dict['f']
+        #             # в случае, если нужно по новой считать величины, обязательно нужно также по новой считать R (?)
+        #             # calculate_R = (iters == 0 and X_mask) or not X_mask
+        #             transform_kwargs = dict()
+        #             # if not calculate_R: transform_kwargs['R'] = R
+        #             if not phi_x_mask: transform_kwargs['f'] = f
+        #             results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
+        #             X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
+        #             # if calculate_R: R = results_dict['R']
+        #             R = results_dict['R']
+        #             if phi_x_mask: f = results_dict['f']
                     
-                    if not increased or (increased and E_min_temp > E_min):
-                        for key1, val1 in params.items():
-                            for key2 in val1['gd']:
-                                val1['gd'][key2] = val1['gd_init'][key2].copy()
-                    else:
-                        for key1, val1 in params.items():
-                            for key2 in val1['gd']:
-                                val1['gd'][key2] = val1['gd_temp'][key2].copy()
-                        increased = False
-            if stop_diff > 0.0 and iters > 2 * patience:
-                E_prev_min = E[:iters-2*patience].min()
-                if E_prev_min - E_min > 0.0 and E_prev_min - E_min < stop_diff:
-                    break
+        #             if not increased or (increased and E_min_temp > E_min):
+        #                 for key1, val1 in params.items():
+        #                     for key2 in val1['gd']:
+        #                         val1['gd'][key2] = val1['gd_init'][key2].copy()
+        #             else:
+        #                 for key1, val1 in params.items():
+        #                     for key2 in val1['gd']:
+        #                         val1['gd'][key2] = val1['gd_temp'][key2].copy()
+        #                 increased = False
+        #     if stop_diff > 0.0 and iters > 2 * patience:
+        #         E_prev_min = E[:iters-2*patience].min()
+        #         if E_prev_min - E_min > 0.0 and E_prev_min - E_min < stop_diff:
+        #             break
+
+        transform_kwargs = dict()
+        if not phi_x_mask: transform_kwargs['f'] = f
+        manager_res_tuple, manager_res_list = lr_manager(lr, iters, E, E_min, E_min_temp,
+                                                         patience_timer, success_timer, began_decreasing, increased,
+                                                         patience, factor, params,
+                                                         func=inner_transform,
+                                                         func_args=(X, C, Theta, phi_x),
+                                                         func_kwargs=transform_kwargs)
+        lr, iters, E_min, E_min_temp, patience_timer, success_timer, began_decreasing, increased = manager_res_tuple
+        # предполагается, что manager_res_list имеет максимальную длину 1
+        if manager_res_list:
+            transorm_res_tuple, transorm_res_dict = manager_res_list[0]
+            X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_tuple
+            R = transorm_res_dict['R']
+            if phi_x_mask: f = transorm_res_dict['f']
+
+        if stop_diff > 0.0 and iters > 2 * patience:
+            E_prev_min = E[:iters-2*patience].min()
+            if E_prev_min - E_min > 0.0 and E_prev_min - E_min < stop_diff:
+                break
+        
         if E[iters] <= stop_value:
             break
 
