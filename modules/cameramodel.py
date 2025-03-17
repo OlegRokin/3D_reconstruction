@@ -21,61 +21,52 @@ def error(X_pix, X_model):
 
 
 def rx(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros, ones = np.zeros_like(theta), np.ones_like(theta)
-    R = np.array([[ones, zeros, zeros],
-                  [zeros, cos_theta, - sin_theta],
-                  [zeros, sin_theta, cos_theta]])
-    return np.transpose(R, (2, 0, 1))
-
+    R = np.zeros((theta.size, 3, 3))
+    R[:,0,0] = 1.0
+    R[:,1,1] = R[:,2,2] = np.cos(theta)
+    R[:,2,1] = np.sin(theta)
+    R[:,1,2] = - R[:,2,1]
+    return R
 
 def ry(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros, ones = np.zeros_like(theta), np.ones_like(theta)
-    R = np.array([[cos_theta, zeros, sin_theta],
-                  [zeros, ones, zeros],
-                  [- sin_theta, zeros, cos_theta]])
-    return np.transpose(R, (2, 0, 1))
-
+    R = np.zeros((theta.size, 3, 3))
+    R[:,1,1] = 1.0
+    R[:,0,0] = R[:,2,2] = np.cos(theta)
+    R[:,0,2] = np.sin(theta)
+    R[:,2,0] = - R[:,0,2]
+    return R
 
 def rz(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros, ones = np.zeros_like(theta), np.ones_like(theta)
-    R = np.array([[cos_theta, - sin_theta, zeros],
-                  [sin_theta, cos_theta, zeros],
-                  [zeros, zeros, ones]])
-    return np.transpose(R, (2, 0, 1))
-
+    R = np.zeros((theta.size, 3, 3))
+    R[:,2,2] = 1.0
+    R[:,0,0] = R[:,1,1] = np.cos(theta)
+    R[:,1,0] = np.sin(theta)
+    R[:,0,1] = - R[:,1,0]
+    return R
 
 def ryxz(Theta):
     return ry(Theta[:,1]) @ rx(Theta[:,0]) @ rz(Theta[:,2])
 
-
 def d_rx(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros = np.zeros_like(theta)
-    R = np.array([[zeros, zeros, zeros],
-                  [zeros, - sin_theta, - cos_theta],
-                  [zeros, cos_theta, - sin_theta]])
-    return np.transpose(R, (2, 0, 1))
-
+    R = np.zeros((theta.size, 3, 3))
+    R[:,1,1] = R[:,2,2] = - np.sin(theta)
+    R[:,2,1] = np.cos(theta)
+    R[:,1,2] = - R[:,2,1]
+    return R
 
 def d_ry(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros = np.zeros_like(theta)
-    R = np.array([[- sin_theta, zeros, cos_theta],
-                  [zeros, zeros, zeros],
-                  [- cos_theta, zeros, - sin_theta]])
-    return np.transpose(R, (2, 0, 1))
-
+    R = np.zeros((theta.size, 3, 3))
+    R[:,0,0] = R[:,2,2] = - np.sin(theta)
+    R[:,0,2] = np.cos(theta)
+    R[:,2,0] = - R[:,0,2]
+    return R
 
 def d_rz(theta):
-    cos_theta, sin_theta = np.cos(theta), np.sin(theta)
-    zeros = np.zeros_like(theta)
-    R = np.array([[- sin_theta, - cos_theta, zeros],
-                  [cos_theta, - sin_theta, zeros],
-                  [zeros, zeros, zeros]])
-    return np.transpose(R, (2, 0, 1))
+    R = np.zeros((theta.size, 3, 3))
+    R[:,0,0] = R[:,1,1] = - np.sin(theta)
+    R[:,1,0] = np.cos(theta)
+    R[:,0,1] = - R[:,1,0]
+    return R
 
 
 def project(X, C, Theta, f=1.0, dir_only=False):
@@ -102,7 +93,6 @@ def enforce_integer_argument(position):
     return decorator
 
 
-# def reverse_project(X_pix, W, r, C, Theta, phi_x, f=1.0, dir_only=False):
 @enforce_integer_argument(2)
 def reverse_project(X_pix, W, H, C, Theta, phi_x, f=1.0, dir_only=False):
     WH = np.array([W, H])
@@ -115,7 +105,6 @@ def reverse_project(X_pix, W, H, C, Theta, phi_x, f=1.0, dir_only=False):
     else: return X_proj + C[np.newaxis,:,:]
 
 
-# def transform(X, C, Theta, phi_x, W, r, delete_back_points=True, delete_boundary_points=False):
 @enforce_integer_argument(5)
 def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary_points=False):
     WH = np.array([W, H])
@@ -148,10 +137,8 @@ def nearest_dot(X, V):
     return x_sol
 
 
-# def find_dots(X_pix, W, r, C, Theta, phi_x):
 @enforce_integer_argument(2)
 def find_dots(X_pix, W, H, C, Theta, phi_x):
-    # X_proj = reverse_project(X_pix, W, r, C, Theta, phi_x, dir_only=True)
     X_proj = reverse_project(X_pix, W, H, C, Theta, phi_x, dir_only=True)
     nearest_dots = np.zeros((X_proj.shape[0], 3))
     for i, x_proj in enumerate(X_proj):
@@ -160,8 +147,8 @@ def find_dots(X_pix, W, H, C, Theta, phi_x):
     return nearest_dots
 
 
-def sphere_project(x, o, R):
-    return o + R * (x - o) / np.linalg.norm(x - o)
+# def sphere_project(x, o, R):
+#     return o + R * (x - o) / np.linalg.norm(x - o)
 
 
 def sgd(x, grad_x, lr):
@@ -450,9 +437,6 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
             if success_timer_ > 0:
                 success_timer_ -= 1
             else:
-                # print(f"{params['phi_x']['gd'] = }")
-                # print(f"{params['phi_x']['gd_temp'] = }")
-
                 print(f'{iters_} : Icrease LR to {lr_ * factor}')
                 lr_ *= factor
                 success_timer_ = patience
@@ -463,9 +447,6 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                     for key2 in val1['gd']:
                         val1['gd_temp'][key2] = val1['gd'][key2].copy()
                         val1['gd'][key2] = val1['gd_init'][key2].copy()
-
-                # print(f"{params['phi_x']['gd'] = }")
-                # print(f"{params['phi_x']['gd_temp'] = }\n")
         
         elif E[iters] > E_min_:
             if increased_:
@@ -478,10 +459,8 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
             else:
                 if began_decreasing_:
                     patience_timer_ = patience
-                else: iters_ -= 1
-
-                # print(f"{params['phi_x']['gd'] = }")
-                # print(f"{params['phi_x']['gd_temp'] = }")
+                else:
+                    iters_ -= 1
 
                 print(f'{iters_} : Decrease LR to {lr_ / factor}')
                 lr_ /= factor
@@ -501,9 +480,6 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                         for key2 in val1['gd']:
                             val1['gd'][key2] = val1['gd_temp'][key2].copy()
                     increased_ = False
-
-                # print(f"{params['phi_x']['gd'] = }")
-                # print(f"{params['phi_x']['gd_temp'] = }\n")
 
     returns_tuple = (lr_, iters_, E_min_, E_min_temp_, patience_timer_, success_timer_, began_decreasing_, increased_)
     return returns_tuple, returns_list
@@ -528,7 +504,6 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         returns_dict = dict()
         
         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-
         Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
         if R is None:
             R_ = Ry @ Rx @ Rz
@@ -705,7 +680,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
     print(f'{E_min = }')
 
-    if phi_x_mask: params['phi_x']['main'] = params['phi_x']['main'][0]
+    if phi_x_mask: params['phi_x']['main'] = params['phi_x']['main'][0]     # вытасикиваем единственный элемент из массива phi_x
 
     returns = [*[val['main'] for key, val in params.items()], E[:iters+1]]
     if ret_arrays: returns.extend([np.array(val['list']) for key, val in params.items()])
@@ -1261,10 +1236,10 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     camera_dir_rot = camera_dir @ R.T
     tan_phi_x_2 = np.tan(phi_x / 2)
     r = W / H
-    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+    camera_corners = np.array([[  tan_phi_x_2,   tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2,   tan_phi_x_2 / r, 1],
                                [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                               [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+                               [  tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners_rot = camera_corners @ R.T
     # Поворот всей системы вокруг оси x на угол -pi/2
     Ryz = np.array([[1.0, 0.0, 0.0],
@@ -1276,7 +1251,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     camera_dir_rot = camera_dir_rot.ravel()
     camera_corners_rot = rotate_array(camera_corners_rot, Ryz)
 
-    # X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
     X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
                         delete_back_points=True, delete_boundary_points=True)[:,0,:]
     I_pix_visible = np.where(~np.isnan(X_pix[:,j_slider.val,0]))[0]
@@ -1354,7 +1328,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     def update(val):
         C_current_point._offsets3d = C_show[j_slider.val,:].reshape(-1, 1)
 
-        # X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, r,
         X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
                             delete_back_points=True, delete_boundary_points=True)[:,0,:]
         I_pix_visible = np.where(~np.isnan(X_pix[:,j_slider.val,0]))[0]
@@ -1448,10 +1421,10 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
     camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
     tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2)
     r = W / H
-    camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                               [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+    camera_corners = np.array([[  tan_phi_x_2,   tan_phi_x_2 / r, 1],
+                               [- tan_phi_x_2,   tan_phi_x_2 / r, 1],
                                [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                               [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+                               [  tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
     # Поворот всей системы вокруг оси x на угол -pi/2
     Ryz = np.array([[1.0, 0.0, 0.0],
@@ -1494,7 +1467,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     X_pix_center = X_pix[:,j_ids,:] + 0.5
     X_model = transform(X_array[t_slider.val], C_array[t_slider.val,j_ids], Theta_array[t_slider.val,j_ids], phi_x_array[t_slider.val],
-                        # W, r, delete_back_points=True, delete_boundary_points=True)
                         W, H, delete_back_points=True, delete_boundary_points=True)
     I_pix_visible = np.where(~np.isnan(X_pix[:,j_ids,0]) == True)[0]
     I_model_visible = np.where(~np.isnan(X_model[:,:,0]) == True)[0]
@@ -1517,10 +1489,10 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
         R = ryxz(Theta_array[t_slider.val,j_ids])
         camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
         tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2)
-        camera_corners = np.array([[tan_phi_x_2, tan_phi_x_2 / r, 1],
-                                   [- tan_phi_x_2, tan_phi_x_2 / r, 1],
+        camera_corners = np.array([[  tan_phi_x_2,   tan_phi_x_2 / r, 1],
+                                   [- tan_phi_x_2,   tan_phi_x_2 / r, 1],
                                    [- tan_phi_x_2, - tan_phi_x_2 / r, 1],
-                                   [tan_phi_x_2, - tan_phi_x_2 / r, 1]])
+                                   [  tan_phi_x_2, - tan_phi_x_2 / r, 1]])
         camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
         # Поворот всей системы вокруг оси x на угол -pi/2
         X_show = rotate_array(X_array[t_slider.val], Ryz)
@@ -1540,7 +1512,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
         corners_surface.set_verts(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot)
 
         X_model = transform(X_array[t_slider.val], C_array[t_slider.val,j_ids], Theta_array[t_slider.val,j_ids], phi_x_array[t_slider.val],
-                            # W, r, delete_back_points=True, delete_boundary_points=True)
                             W, H, delete_back_points=True, delete_boundary_points=True)
         I_model_visible = np.where(~np.isnan(X_model[:,:,0]) == True)[0]
         I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)))
@@ -1586,27 +1557,6 @@ def get_Theta(R, orthogonolize=False):
     return Theta
 
 
-# def get_Theta_orth(R_array):
-#     Theta = np.zeros(R_array.shape[:2])
-#     for j, R in enumerate(R_array):
-#         U, d, Vh = np.linalg.svd(R)
-#         R_rot = U @ Vh
-#         Theta[j] = get_Theta(R_rot.reshape(1, 3, 3))[0]
-#     return Theta
-
-
-# def get_Theta_orth(R, ret_R=False, ret_sigma=False):
-#     U, Sigma, Vh = np.linalg.svd(R)
-#     R_orth = U @ Vh
-#     det_R_orth = np.linalg.det(R_orth)
-#     if (det_R_orth < 0.0).any():
-#         j_bad = np.where(det_R_orth < 0.0)[0]
-#         print(f'Bad: {j_bad}')
-#         R_orth[j_bad] *= -1.0
-#     if not ret_sigma: return get_Theta(R_orth)
-#     else: get_Theta(R_orth), Sigma
-
-
 def get_R(x, y):
     v = np.cross(x, y)
     v_norm = np.linalg.norm(v)
@@ -1618,9 +1568,9 @@ def get_R(x, y):
 
         R = cos_phi * np.eye(3)
         R += (1 - cos_phi) * (n.reshape(-1, 1) @ n.reshape(1, -1))
-        R += sin_phi * np.array([[0.0, -n[2], n[1]],
-                                 [n[2], 0.0, -n[0]],
-                                 [-n[1], n[0], 0.0]])
+        R += sin_phi * np.array([[  0.0, -n[2],  n[1]],
+                                 [ n[2],  0.0,  -n[0]],
+                                 [-n[1],  n[0],  0.0]])
     else:
         R = np.eye(3)
     return R
@@ -1638,8 +1588,6 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
         X_pix_center = X_pix + 0.5
     else:
         # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
-        # r = W / H
-        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
         X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
     X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
@@ -1674,18 +1622,15 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
         X_pix_center = X_pix + 0.5
     else:
         # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
-        # r = W / H
-        # X_pix_center = (X_pix + 0.5) / W - np.array([0.5, 0.5 / r])
-        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
+        WH_max = max(W, H)
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
 
     if not normalized:
         f_x = f_y = W / 2 / np.tan(phi_x / 2)
         p_x, p_y = W / 2, H / 2
     else:
-        # r = W / H
-        # f_x, f_y = np.array([1, r]) / 2 / np.tan(phi_x / 2)
         # f_x = f_y = 1 / 2 / np.tan(phi_x / 2)
-        f_x = f_y = W / max(W, H) / 2 / np.tan(phi_x / 2)
+        f_x = f_y = W / WH_max / 2 / np.tan(phi_x / 2)
         p_x = p_y = 0.0
     K_ = np.array([[f_x, 0.0, p_x],
                    [0.0, f_y, p_y],
@@ -1696,8 +1641,8 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     U, d, Vh = np.linalg.svd(E)
 
     W_ = np.array([[0.0, -1.0, 0.0],
-                   [1.0, 0.0, 0.0],
-                   [0.0, 0.0, 1.0]])
+                   [1.0,  0.0, 0.0],
+                   [0.0,  0.0, 1.0]])
     
     status = False
     for k in range(4):
