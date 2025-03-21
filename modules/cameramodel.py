@@ -1,8 +1,8 @@
 NAME = "cameramodel"
 
 import numpy as np
-# from scipy.sparse.linalg import eigsh
-# import scipy.ndimage as ndimage
+from scipy.sparse.linalg import eigsh
+from scipy.optimize import linprog
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
 import matplotlib.patches as patches
@@ -98,7 +98,6 @@ def reverse_project(X_pix, W, H, C, Theta, phi_x, f=1.0, dir_only=False):
     WH = np.array([W, H])
     X_pix_center = X_pix + 0.5
     X_proj = np.full((*X_pix.shape[:2], 3), f)
-    # X_proj[:,:,:2] = 2.0 * f * np.tan(phi_x / 2) * (X_pix_center[:,:,:2] / W - np.array([0.5, 0.5 / r]))
     X_proj[:,:,:2] = f * np.tan(phi_x / 2.0) / W * (2.0 * X_pix_center[:,:,:2] - WH)
     X_proj = np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
     if dir_only: return X_proj
@@ -110,11 +109,8 @@ def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary
     WH = np.array([W, H])
     X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
     if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
-    # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2) + np.array([1.0, 1.0 / r])[np.newaxis,np.newaxis,:])
-    # X_model = W / 2.0 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / np.tan(phi_x / 2.0) + np.array([1.0, 1.0 / r]))
     X_model = (W / np.tan(phi_x / 2.0) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH) / 2.0
     if delete_boundary_points:
-        # I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= W / r))
         I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= H))
         X_model[I, J] = np.nan
     return X_model
@@ -126,9 +122,9 @@ def distance(X, C, Theta):
 
 
 def nearest_dot(X, V):
-    n = X.shape[0]
-    M = np.full((n, n), -1)
-    np.fill_diagonal(M, n - 1)
+    N = X.shape[0]
+    M = np.full((N, N), -1)
+    np.fill_diagonal(M, N - 1)
     A = V @ V.T * M
     b = - np.sum(V @ X.T * M, axis=1, keepdims=True)
     lmbda = np.linalg.solve(A, b)
@@ -152,8 +148,6 @@ def find_dots(X_pix, W, H, C, Theta, phi_x):
 
 
 def sgd(x, grad_x, lr):
-    # return x - lr * grad_x
-    # return x - lr * grad_x,
     return x - lr * grad_x, {}
 
 
@@ -162,257 +156,9 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
     r_new = rho_2 * r + (1 - rho_2) * grad_x**2
     s_corr = s_new / (1 - rho_1**t)
     r_corr = r_new / (1 - rho_2**t)
-    # x_new = x - lr * s_corr / (1e-8 + np.sqrt(r_corr))
-    # x_new = x - lr * s_corr / np.sqrt(r_corr)
     x_new = x - lr * s_corr / (1e-12 + np.sqrt(r_corr))
     t_new = t + 1
-    # return x_new, s_new, r_new
-    # return x_new, s_new, r_new, t_new
     return x_new, {'s': s_new, 'r': r_new, 't': t_new}
-
-
-# @enforce_integer_argument(2)
-# def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-#         X_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000, factor=2.0,
-#         stop_value=0.0, stop_diff=0.0, print_step=1000, ret_arrays=False):
-#     N, K = X_pix.shape[:2]
-#     WH_2 = np.array([W, H]) / 2.0
-#     X_visible = ~np.isnan(X_pix)[:,:,0]
-#     NK_nan = X_visible.sum()
-#     X_pix_center = X_pix + 0.5
-#     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), phi_x_0
-#     X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-#     # X_model = np.zeros_like(X_pix_center)
-
-#     D = {}
-#     # D['E', 'X_model'] = np.zeros((N, K, 2))
-#     D['X_model', 'X_rot'] = np.zeros((N, K, 2, 3))
-#     # D['X_model', 'X'] = np.zeros((N, K, 2, 3))
-#     # if X_mask:
-#     #     D['E', 'X'] = np.zeros((N, 3))
-#     # D['E', 'C'] = np.zeros((K, 3))
-#     D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
-#     # D['X_rot', 'Theta'] = np.zeros((N, K, 3, 3))
-#     # D['X_model', 'Theta'] = np.zeros((N, K, 2, 3))
-#     # D['E', 'Theta'] = np.zeros((K, 3))
-#     # if phi_x_mask:
-#     #     D['X_model', 'phi_x'] = np.zeros((N, K, 2))
-#     #     D['E', 'phi_x'] = 0.0
-
-#     def inner_transform(X, C, Theta, phi_x, R=None, f=None):
-#         returns_dict = dict()
-        
-#         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-
-#         Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
-#         if R is None:
-#             R_ = Ry @ Rx @ Rz
-#             returns_dict['R'] = R_
-#         else:
-#             R_ = R
-#         X_rot = np.einsum('jlk,ijl->ijk', R_, X_tr)
-
-#         if f is None:
-#             f_ = W / 2.0 / np.tan(phi_x / 2.0)
-#             returns_dict['f'] = f_
-#         else:
-#             f_ = f
-#         X_model = f_ * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH_2
-#         X_diff = np.nan_to_num(X_model - X_pix_center)
-
-#         returns_tuple = (X_diff, X_rot, X_tr, Rx, Ry, Rz)
-        
-#         return returns_tuple, returns_dict
-
-#     if not phi_x_mask:
-#         f = W / 2.0 / np.tan(phi_x / 2.0)
-
-#     if optimizer == 'Adam':
-#         s_X = r_X = np.zeros_like(X)
-#         s_C = r_C = np.zeros_like(C)
-#         s_Theta = r_Theta = np.zeros_like(Theta)
-#         s_phi_x = r_phi_x = 0.0
-#         t = 1
-
-#     E = np.zeros(max_iters)
-#     E_min, E_min_temp = np.inf, np.inf
-#     patience_timer = 0
-#     success_timer = patience
-#     began_decreasing = False
-#     increased = False
-
-#     if ret_arrays:
-#         X_list, C_list, Theta_list, phi_x_list = [], [], [], []
-
-#     for iters in range(max_iters):
-#         if ret_arrays:
-#             X_list.append(X)
-#             C_list.append(C)
-#             Theta_list.append(Theta)
-#             phi_x_list.append(phi_x)
-
-#         # X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-
-#         # Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
-#         # if (iters == 0 and X_mask) or not X_mask:
-#         #     R = Ry @ Rx @ Rz
-#         # X_rot = np.einsum('jlk,ijl->ijk', R, X_tr)
-
-#         # if phi_x_mask:
-#         #     tan_phi_x_2 = np.tan(phi_x / 2.0)
-#         #     f = W / 2.0 / tan_phi_x_2
-#         # # X_model = W / 2.0 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
-#         # X_model = f * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH_2
-
-#         # X_diff = np.nan_to_num(X_model - X_pix_center)
-
-#         calculate_R = (iters == 0 and X_mask) or not X_mask
-#         transform_kwargs = dict()
-#         if not calculate_R: transform_kwargs['R'] = R
-#         if not phi_x_mask: transform_kwargs['f'] = f
-#         results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
-#         X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
-#         if calculate_R: R = results_dict['R']
-#         if phi_x_mask: f = results_dict['f']
-
-#         E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
-        
-#         if iters == 0:
-#             E_min = E[iters]
-#         else:
-#             if E[iters] < E_min:
-#                 E_min = E[iters]
-#                 if not began_decreasing:
-#                     began_decreasing = True
-#                 X_release, C_release, Theta_release, phi_x_release = X, C, Theta, phi_x
-#                 if patience_timer != patience:
-#                     patience_timer = patience
-#                 if success_timer > 0:
-#                     success_timer -= 1
-#                 else:
-#                     print(f'{iters} : Icrease LR to {lr * factor}')
-#                     lr *= factor
-#                     success_timer = patience
-#                     increased = True
-#                     E_min_temp = E_min
-#                     if optimizer == 'Adam':
-#                         s_X_temp, r_X_temp = s_X.copy(), r_X.copy()
-#                         s_C_temp, r_C_temp = s_C.copy(), r_C.copy()
-#                         s_Theta_temp, r_Theta_temp = s_Theta.copy(), r_Theta.copy()
-#                         s_phi_x_temp, r_phi_x_temp = s_phi_x, r_phi_x
-#                         t_temp = t
-#                         s_X = r_X = np.zeros_like(X)
-#                         s_C = r_C = np.zeros_like(C)
-#                         s_Theta = r_Theta = np.zeros_like(Theta)
-#                         s_phi_x = r_phi_x = 0.0
-#                         t = 1
-#             elif E[iters] > E_min:
-#                 if increased:
-#                     patience_timer = 0
-#                 if success_timer != patience:
-#                     success_timer = patience
-#                 if patience_timer > 0:
-#                     patience_timer -= 1
-#                 else:
-#                     print(f'{iters} : Decrease LR to {lr / factor}')
-#                     lr /= factor
-#                     if began_decreasing:
-#                         patience_timer = patience
-#                     X, C, Theta, phi_x = X_release, C_release, Theta_release, phi_x_release
-#                     # X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-#                     # Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
-#                     # R = Ry @ Rx @ Rz
-#                     # X_rot = np.einsum('jlk,ijl->ijk', R, X_tr)
-#                     # if phi_x_mask:
-#                     #     tan_phi_x_2 = np.tan(phi_x / 2.0)
-#                     #     f = W / 2.0 / tan_phi_x_2
-#                     # # X_model = W / 2 * (X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] / tan_phi_x_2 + np.array([1.0, 1.0 / r]))      # должно считаться быстрее, чем через задание X_model[:,:,0] и X_model[:,:,1] по отдельности
-#                     # X_model = f * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH_2
-#                     # X_diff = np.nan_to_num(X_model - X_pix_center)
-#                     calculate_R = (iters == 0 and X_mask) or not X_mask
-#                     transform_kwargs = dict()
-#                     if not calculate_R: transform_kwargs['R'] = R
-#                     if not phi_x_mask: transform_kwargs['f'] = f
-#                     results_tuple, results_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
-#                     X_diff, X_rot, X_tr, Rx, Ry, Rz = results_tuple
-#                     if calculate_R: R = results_dict['R']
-#                     if phi_x_mask: f = results_dict['f']
-                    
-#                     if optimizer == 'Adam':
-#                         if not increased or (increased and E_min_temp > E_min):
-#                             s_X = r_X = np.zeros_like(X)
-#                             s_C = r_C = np.zeros_like(C)
-#                             s_Theta = r_Theta = np.zeros_like(Theta)
-#                             s_phi_x = r_phi_x = 0
-#                             t = 1
-#                         else:
-#                             s_X, r_X = s_X_temp.copy(), r_X_temp.copy()
-#                             s_C, r_C = s_C_temp.copy(), r_C_temp.copy()
-#                             s_Theta, r_Theta = s_Theta_temp.copy(), r_Theta_temp.copy()
-#                             s_phi_x, r_phi_x = s_phi_x_temp, r_phi_x_temp
-#                             t = t_temp
-#                             increased = False
-#             if stop_diff > 0.0 and iters > 2 * patience:
-#                 E_prev_min = E[:iters-2*patience].min()
-#                 if E_prev_min - E_min > 0.0 and E_prev_min - E_min < stop_diff:
-#                     break
-#         if E[iters] <= stop_value:
-#             break
-
-#         if iters % print_step == 0: print(f'{iters} : {E_min}')
-
-#         if iters == max_iters - 1: break
-
-#         D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
-#         D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
-#         D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
-#         D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
-
-#         D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = f / X_rot[:,:,2]
-#         D['X_model', 'X_rot'][:,:,:,2] = - f / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
-
-#         D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
-
-#         D['X_model', 'X'] = np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
-
-#         D['E', 'X_model'] = X_diff / NK_nan
-
-#         if X_mask:
-#             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
-
-#         D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-
-#         D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
-
-#         if phi_x_mask:
-#             D['X_model', 'phi_x'] = - f / np.sin(phi_x) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
-#             D['E', 'phi_x'] = np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
-
-#         if optimizer == 'SGD':
-#             if X_mask:
-#                 X = sgd(X, D['E', 'X'], lr)
-#             C = sgd(C, D['E', 'C'], lr)
-#             Theta = sgd(Theta, D['E', 'Theta'], lr)
-#             if phi_x_mask:
-#                 phi_x = sgd(phi_x, D['E', 'phi_x'], lr)
-#         elif optimizer == 'Adam':
-#             if X_mask:
-#                 X, s_X, r_X = gd_adam(X, D['E', 'X'], lr, s_X, r_X, t=t)
-#             C, s_C, r_C = gd_adam(C, D['E', 'C'], lr, s_C, r_C, t=t)
-#             Theta, s_Theta, r_Theta = gd_adam(Theta, D['E', 'Theta'], lr, s_Theta, r_Theta, t=t)
-#             if phi_x_mask:
-#                 phi_x, s_phi_x, r_phi_x = gd_adam(phi_x, D['E', 'phi_x'], lr, s_phi_x, r_phi_x, t=t)
-#             t += 1
-
-#         if X_mask:
-#             X, C, Theta, R = align_scene(X, C, Theta, ret_R=True)
-#             X, C = normalize_scene(X, C)
-
-#     print(f'{E_min = }')
-
-#     returns = [X_release, C_release, Theta_release, phi_x_release, E[:iters+1]]
-#     if ret_arrays: returns.extend(np.array(X_list), np.array(C_list), np.array(Theta_list), np.array(phi_x_list))
-#     return returns
 
 
 def lr_manager(lr, iters, E, E_min, E_min_temp,
@@ -488,7 +234,6 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
 
 @enforce_integer_argument(2)
 def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-        # X_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000, factor=2.0,
         X_mask=True, C_Theta_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000,
         factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
     N, K = X_pix.shape[:2]
@@ -500,7 +245,6 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
     D = dict()
     D['X_model', 'X_rot'] = np.zeros((N, K, 2, 3))
-    # D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
     if C_Theta_mask: D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
 
     def inner_transform(X, C, Theta, phi_x, calc_Rs, R=None, f=None):
@@ -523,11 +267,9 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_model = f_ * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH_2
         X_diff = np.nan_to_num(X_model - X_pix_center)
 
-        # returns_tuple = (X_diff, X_rot, X_tr, Rx, Ry, Rz)
         returns_list = [X_diff, X_rot, X_tr]
         if calc_Rs: returns_list.extend([Rx, Ry, Rz])
 
-        # return returns_tuple, returns_dict
         return returns_list, returns_dict
 
     if not phi_x_mask:
@@ -535,14 +277,11 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
     params_names = []
     if X_mask: params_names.append('X')
-    # params_names.extend(['C', 'Theta'])
     if C_Theta_mask: params_names.extend(['C', 'Theta'])
     if phi_x_mask: params_names.append('phi_x')
 
     params = {name: dict() for name in params_names}
     if X_mask: params['X']['main'] = X
-    # params['C']['main'] = C
-    # params['Theta']['main'] = Theta
     if C_Theta_mask: params['C']['main'], params['Theta']['main'] = C, Theta
     if phi_x_mask: params['phi_x']['main'] = phi_x
 
@@ -577,15 +316,12 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             for key, val in params.items():
                 val['list'].append(val['main'].copy())
 
-        # calculate_R = (iters == 0 and X_mask) or not X_mask
         calculate_R = (iters == 0 and X_mask) or not X_mask
         transform_kwargs = dict()
         if not calculate_R: transform_kwargs['R'] = R
         if not phi_x_mask: transform_kwargs['f'] = f
-        # transorm_res_tuple, transorm_res_dict = inner_transform(X, C, Theta, phi_x, **transform_kwargs)
         calculate_Rs = C_Theta_mask or iters == 0
         transorm_res_list, transorm_res_dict = inner_transform(X, C, Theta, phi_x, calc_Rs=calculate_Rs, **transform_kwargs)
-        # X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_tuple
         if calculate_Rs: X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_list
         else: X_diff, X_rot, X_tr = transorm_res_list
         if calculate_R: R = transorm_res_dict['R']
@@ -600,18 +336,14 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
                                                          patience_timer, success_timer, began_decreasing, increased,
                                                          patience, factor, params,
                                                          func=inner_transform,
-                                                         # func_args=(X, C, Theta, phi_x),
                                                          func_args=(X, C, Theta, phi_x, C_Theta_mask),
                                                          func_kwargs=transform_kwargs)
         lr, iters, E_min, E_min_temp, patience_timer, success_timer, began_decreasing, increased = manager_res_tuple
         # предполагается, что manager_res_list имеет максимальную длину 1
         if manager_res_list:
-            # transorm_res_tuple, transorm_res_dict = manager_res_list[0]
             transorm_res_list, transorm_res_dict = manager_res_list[0]
-            # X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_tuple
             if C_Theta_mask: X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_list
             else: X_diff, X_rot, X_tr = transorm_res_list
-            # R = transorm_res_dict['R']
             if C_Theta_mask: R = transorm_res_dict['R']
             if phi_x_mask: f = transorm_res_dict['f']
 
@@ -632,15 +364,8 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if iters % print_step == 0: print(f'{iters} : {E_min}')
 
-        # D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
-        # D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
-        # D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
-        # D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
-
         D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = f / X_rot[:,:,2]
         D['X_model', 'X_rot'][:,:,:,2] = - f / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
-
-        # D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
 
         D['X_model', 'X'] = np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
 
@@ -648,10 +373,6 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if X_mask:
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
-        
-        # D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-
-        # D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
 
         if C_Theta_mask:
             D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
@@ -668,46 +389,12 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['X_model', 'phi_x'] = - f / np.sin(phi_x) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
             D['E', 'phi_x'] = np.array([np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())])      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
         
-        # if X_mask:
-        #     results = gd_func_dict[optimizer](X, D['E', 'X'], lr, **params['X']['gd'])
-        #     X = results[0]
-        #     for i, key in enumerate(params['X']['gd']):
-        #         params['X']['gd'][key] = results[i+1]
-        
-        # results = gd_func_dict[optimizer](C, D['E', 'C'], lr, **params['C']['gd'])
-        # C = results[0]
-        # for i, key in enumerate(params['C']['gd']):
-        #     params['C']['gd'][key] = results[i+1]
-        
-        # results = gd_func_dict[optimizer](Theta, D['E', 'Theta'], lr, **params['Theta']['gd'])
-        # Theta = results[0]
-        # for i, key in enumerate(params['Theta']['gd']):
-        #     params['Theta']['gd'][key] = results[i+1]
-        
-        # if phi_x_mask:
-        #     print(f'{phi_x = }')
-        #     results = gd_func_dict[optimizer](phi_x, D['E', 'phi_x'], lr, **params['phi_x']['gd'])
-        #     phi_x = results[0]
-        #     print(f'{phi_x = }')
-        #     for i, key in enumerate(params['phi_x']['gd']):
-        #         params['phi_x']['gd'][key] = results[i+1]
-
         for key, val in params.items():
             gd_result, gd_results_dict = gd_func_dict[optimizer](val['main'], D['E', key], lr, **val['gd'])
             val['main'][:] = gd_result
             for key1, val1 in val['gd'].items():
                 val1[:] = gd_results_dict[key1]
-
-        # if X_mask:
-        #     X, C, Theta, R = align_scene(X, C, Theta, ret_R=True)
-        #     X, C = normalize_scene(X, C)
-
-        # if X_mask: params['X']['main'] = X
-        # params['C']['main'] = C
-        # params['Theta']['main'] = Theta
-        # if phi_x_mask: params['phi_x']['main'] = phi_x
-
-        # if X_mask:
+        
         if X_mask and C_Theta_mask:
             X[:], C[:], Theta[:], R = align_scene(X, C, Theta=Theta, ret_R=True)
             X[:], C[:] = normalize_scene(X, C)
@@ -1165,7 +852,6 @@ def align_scene(X, C, Theta=None, R=None, ret_R=False):
 def normalize_scene(X, C, main_indexes=None, R_scale=1.0, ret_j=False):
     if main_indexes is None:
         j0 = 0
-        # j = np.argmax(np.linalg.norm(C - C[0], axis=1))
         j = 1 + np.argmax(np.linalg.norm(C[1:] - C[0], axis=1))
     else: j0, j = main_indexes
     scale = np.linalg.norm(C[j] - C[j0])
@@ -1290,8 +976,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
                                [  tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners_rot = camera_corners @ R.T
     # Поворот всей системы вокруг оси x на угол -pi/2
-    Ryz = np.array([[1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
+    Ryz = np.array([[1.0,  0.0, 0.0],
+                    [0.0,  0.0, 1.0],
                     [0.0, -1.0, 0.0]])
     X_show = rotate_array(X, Ryz)
     C_show = rotate_array(C, Ryz)
@@ -1475,8 +1161,8 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
                                [  tan_phi_x_2, - tan_phi_x_2 / r, 1]])
     camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
     # Поворот всей системы вокруг оси x на угол -pi/2
-    Ryz = np.array([[1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
+    Ryz = np.array([[1.0,  0.0, 0.0],
+                    [0.0,  0.0, 1.0],
                     [0.0, -1.0, 0.0]])
     X_show = rotate_array(X_array[t_slider.val], Ryz)
     C_show = rotate_array(C_array[t_slider.val], Ryz)
@@ -1498,7 +1184,7 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     center_to_corners = Line3DCollection(np.stack((np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3),
                                                    np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot), axis=2).reshape(-1, 2, 3),
-                                        linewidth=1.0, colors='blue')
+                                         linewidth=1.0, colors='blue')
     ax0.add_collection(center_to_corners)
 
     corners_surface = Poly3DCollection(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot, linewidths=1.0, edgecolors='blue', facecolor='blue', alpha=0.25)
@@ -1581,8 +1267,10 @@ def orthogonolize_R(Q, check_det=True):
     R = U @ Vh
     if check_det:
         det_R = np.linalg.det(R)
-        if (det_R < 0.0).any():
-            j_bad = np.where(det_R < 0.0)[0]
+        # if (det_R < 0.0).any():
+        #     j_bad = np.where(det_R < 0.0)[0]
+        j_bad = np.where(det_R < 0.0)[0]
+        if j_bad.size > 0:
             print(f'Bad: {j_bad}')
             R[j_bad] *= -1.0
     return R, Sigma
@@ -1618,10 +1306,97 @@ def get_R(x, y):
         R += (1 - cos_phi) * (n.reshape(-1, 1) @ n.reshape(1, -1))
         R += sin_phi * np.array([[  0.0, -n[2],  n[1]],
                                  [ n[2],  0.0,  -n[0]],
-                                 [-n[1],  n[0],  0.0]])
+                                 [-n[1],  n[0],   0.0]])
     else:
         R = np.eye(3)
     return R
+
+
+def get_X_from_C_Theta(X_pix, C, Theta, phi_x, W, H, normalized=False):
+    N, K = X_pix.shape[:2]
+    
+    if not normalized:
+        X_pix_center = X_pix + 0.5
+
+        f_x = f_y = W / 2.0 / np.tan(phi_x / 2)
+        p_x, p_y = W / 2.0, H / 2.0
+    else:
+        WH_max = max(W, H)
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
+
+        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2)
+        p_x = p_y = 0.0
+    
+    K_ = np.array([[f_x, 0.0, p_x],
+                   [0.0, f_y, p_y],
+                   [0.0, 0.0, 1.0]])
+    
+    RT = np.transpose(ryxz(Theta), (0, 2, 1))
+    RTC = np.concatenate((RT, - np.einsum('jkl,jl->jk', RT, C).reshape(-1, 3, 1)), axis=2)
+
+    P = np.einsum('kl,jln->jkn', K_, RTC)
+    print(f'{P.shape = }')
+
+    A_array = np.zeros((N, 2 * K, 4))
+    A_array[:,::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+    A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+    A_array = np.nan_to_num(A_array)
+
+    A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
+    lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+    lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+    X = - np.linalg.solve(lstsq_mat, lstsq_vec)
+
+    return X
+
+
+def get_C_Theta_from_X(X, X_pix, phi_x, W, H, normalized=False):
+    N, K = X_pix.shape[:2]
+
+    if not normalized:
+        X_pix_center = X_pix + 0.5
+
+        f_x = f_y = W / 2.0 / np.tan(phi_x / 2)
+        p_x, p_y = W / 2.0, H / 2.0
+    else:
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
+
+        f_x = f_y = W / max(W, H) / 2.0 / np.tan(phi_x / 2)
+        p_x = p_y = 0.0
+
+    K_ = np.array([[f_x, 0.0, p_x],
+                   [0.0, f_y, p_y],
+                   [0.0, 0.0, 1.0]])
+
+    X_hom = np.zeros((N, 4))
+    X_hom[:,:3] = X
+    X_hom[:,3] = 1.0
+
+    A_array = np.zeros((K, 2 * N, 12))
+    A_array[:,::2,:4] = A_array[:,1::2,4:8] = - X_hom
+    A_array[:, ::2,8:12] = X_pix_center[:,:,0].T[:,:,np.newaxis] * X_hom
+    A_array[:,1::2,8:12] = X_pix_center[:,:,1].T[:,:,np.newaxis] * X_hom
+    A_array = np.nan_to_num(A_array)
+
+    # U, sigma, Vh = np.linalg.svd(A_array)
+    # P_array = Vh[:,-1,:].reshape(K, 3, 4)
+    P_array = np.zeros((K, 3, 4))
+    for j in range(K):
+        w = eigsh(A_array[j].T @ A_array[j], k=1, which='SM')[1]
+        P_array[j] = w.reshape(3, 4)
+
+    RT = np.linalg.solve(K_, P_array)
+
+    R, T = RT[:,:,:3], RT[:,:,3]
+
+    U, sigma, Vh = np.linalg.svd(R)
+    R_rot = np.transpose(U @ Vh, (0, 2, 1))
+    C = - np.einsum('jkl,jl->jk', R_rot, T) / sigma.mean(axis=1, keepdims=True)
+    R_rot *= np.sign(np.linalg.det(R_rot))[:,np.newaxis,np.newaxis]
+
+    Theta = get_Theta(R_rot)
+
+    return C, Theta
 
 
 def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=None, H=None):
@@ -1632,31 +1407,40 @@ def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=
     if normalize and (W is None or H is None):
         raise ValueError('With normalize=True W and H have to be passed.')
 
+    N = X_pix.shape[0]
+
     if not normalize:
         X_pix_center = X_pix + 0.5
     else:
         # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
         X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
-    X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
 
-    A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
-                         X_hom[:,1,0] * X_hom[:,0,1],
-                         X_hom[:,1,0] * X_hom[:,0,2],
-                         X_hom[:,1,1] * X_hom[:,0,0],
-                         X_hom[:,1,1] * X_hom[:,0,1],
-                         X_hom[:,1,1] * X_hom[:,0,2],
-                         X_hom[:,1,2] * X_hom[:,0,0],
-                         X_hom[:,1,2] * X_hom[:,0,1],
-                         X_hom[:,1,2] * X_hom[:,0,2]))
-    U, d, Vh = np.linalg.svd(A)
+    # X_hom = np.concatenate((X_pix_center, np.ones((*X_pix_center.shape[:-1], 1))), axis=-1)
+    X_hom = np.zeros((N, 2, 3))
+    X_hom[:,:,:2] = X_pix_center
+    X_hom[:,:,2] = 1.0
+
+    # A = np.column_stack((X_hom[:,1,0] * X_hom[:,0,0],
+    #                      X_hom[:,1,0] * X_hom[:,0,1],
+    #                      X_hom[:,1,0] * X_hom[:,0,2],
+    #                      X_hom[:,1,1] * X_hom[:,0,0],
+    #                      X_hom[:,1,1] * X_hom[:,0,1],
+    #                      X_hom[:,1,1] * X_hom[:,0,2],
+    #                      X_hom[:,1,2] * X_hom[:,0,0],
+    #                      X_hom[:,1,2] * X_hom[:,0,1],
+    #                      X_hom[:,1,2] * X_hom[:,0,2]))
+
+    A = (X_hom[:,1,:][:,:,np.newaxis] @ X_hom[:,0,:][:,np.newaxis,:]).reshape(N, 9)
+
+    U, sigma, Vh = np.linalg.svd(A)
     f = Vh[-1]
     # f = eigsh(A.T @ A, k=1, which='SM')[1]    # вроде иногда должно считаться быстрее, чем с np.linalg.svd(A)
     F = f.reshape(3, 3)
 
     if make_rank_2 and np.linalg.matrix_rank(F) != 2:
-        U, d, Vh = np.linalg.svd(F)
-        d[-1] = 0.0
-        F = U @ np.diag(d) @ Vh
+        U, sigma, Vh = np.linalg.svd(F)
+        sigma[-1] = 0.0
+        F = U @ np.diag(sigma) @ Vh
 
     if not ret_A: return F
     else: return F, A
@@ -1666,27 +1450,30 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
     if X_pix.shape[1] != 2:
         raise ValueError('Expected X_pix to have shape[1]=2')
     
+    N = X_pix.shape[0]
+    
     if not normalized:
         X_pix_center = X_pix + 0.5
+
+        f_x = f_y = W / 2.0 / np.tan(phi_x / 2)
+        p_x, p_y = W / 2.0, H / 2.0
     else:
-        # X_pix_center = (X_pix + 0.5) / np.array([W, H]) - 0.5
         WH_max = max(W, H)
         X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
 
-    if not normalized:
-        f_x = f_y = W / 2 / np.tan(phi_x / 2)
-        p_x, p_y = W / 2, H / 2
-    else:
-        # f_x = f_y = 1 / 2 / np.tan(phi_x / 2)
-        f_x = f_y = W / WH_max / 2 / np.tan(phi_x / 2)
+        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2)
         p_x = p_y = 0.0
+
     K_ = np.array([[f_x, 0.0, p_x],
                    [0.0, f_y, p_y],
                    [0.0, 0.0, 1.0]])
 
-    P1 = np.column_stack((K_, np.zeros(3)))
+    # P1 = np.column_stack((K_, np.zeros(3)))
+    P = np.zeros((2, 3, 4))
+    P[0,:,:3] = K_
+
     E = K_.T @ F @ K_
-    U, d, Vh = np.linalg.svd(E)
+    U, sigma, Vh = np.linalg.svd(E)
 
     W_ = np.array([[0.0, -1.0, 0.0],
                    [1.0,  0.0, 0.0],
@@ -1709,14 +1496,20 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
         
         if np.linalg.det(R) < 0: R = - R
 
-        P2 = K_ @ np.column_stack((R, t))
+        # P2 = K_ @ np.column_stack((R, t))
+        P[1,:,:] = K_ @ np.column_stack((R, t))
 
-        X1, Y1 = X_pix_center[:,0,:].T
-        X2, Y2 = X_pix_center[:,1,:].T
-        A_array = np.stack((X1[:,np.newaxis] * P1[2,:] - P1[0,:],
-                            Y1[:,np.newaxis] * P1[2,:] - P1[1,:],
-                            X2[:,np.newaxis] * P2[2,:] - P2[0,:],
-                            Y2[:,np.newaxis] * P2[2,:] - P2[1,:]), axis=1)
+        # X1, Y1 = X_pix_center[:,0,:].T
+        # X2, Y2 = X_pix_center[:,1,:].T
+        # A_array = np.stack((X1[:,np.newaxis] * P1[2,:] - P1[0,:],
+        #                     Y1[:,np.newaxis] * P1[2,:] - P1[1,:],
+        #                     X2[:,np.newaxis] * P2[2,:] - P2[0,:],
+        #                     Y2[:,np.newaxis] * P2[2,:] - P2[1,:]), axis=1)
+
+        A_array = np.zeros((N, 4, 4))
+        A_array[:,::2,:]  = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+        A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+
         A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
         lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
         lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
@@ -1738,7 +1531,6 @@ def get_scene_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False):
 def find_phi_x(X_pix, W, H, attempts=5, delete_outliers=True, normalize=False):
     K = X_pix.shape[1]
     X_visible = ~np.isnan(X_pix)[:,:,0]
-    # r = W / H
     WH = np.array([W, H])
 
     std_matrix, i_size_matrix = np.full((K, K), np.nan), np.zeros((K, K), dtype=np.int32)
@@ -1780,8 +1572,6 @@ def find_phi_x(X_pix, W, H, attempts=5, delete_outliers=True, normalize=False):
             X_test_rot = np.zeros((*X_test.shape[:2], 2, 3))
             X_test_rot[:,:,0,:] = X_test
             X_test_rot[:,:,1,:] = np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
-            # X_model_test = W / 2 * (X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] / np.tan(phi_x_test / 2)[:,np.newaxis,np.newaxis,np.newaxis] \
-            #                         + np.array([1.0, 1.0 / r]))
             X_model_test = (W / np.tan(phi_x_test / 2)[:,np.newaxis,np.newaxis,np.newaxis] * X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] + WH) / 2.0
             X_pix_center = X_pix[ij_subset] + 0.5
             X_diff = X_model_test - X_pix_center
@@ -1958,3 +1748,107 @@ def approximate(j_small, j_big, X_small, extrapolate=False):
             k += 1
 
     return X_big
+
+
+def rotate_around_axis(n, cos_phi, sin_phi):
+    R1 = np.tile(np.eye(3), (n.shape[0], 1, 1))
+    R2 = n[:,:,np.newaxis] @ n[:,np.newaxis,:]
+    R3 = np.zeros((n.shape[0], 3, 3))
+    R3[:,0,1] = -n[:,2]
+    R3[:,0,2] = n[:,1]
+    R3[:,1,2] = -n[:,0]
+    R3 -= np.transpose(R3, (0, 2, 1))
+
+    return cos_phi[:,np.newaxis,np.newaxis] * R1 + (1.0 - cos_phi[:,np.newaxis,np.newaxis]) * R2 + sin_phi[:,np.newaxis,np.newaxis] * R3
+
+
+def generate_cameras(K, r_min=0.0, r_max=1.0, phi_min=0.0, phi_max=2*np.pi, theta_min=0.0, theta_max=np.pi, seed=None, sigma=None):
+    if seed is not None:
+        np.random.seed(seed)
+    r_, phi_, theta_ = np.random.uniform([r_min, phi_min, theta_min], [r_max, phi_max, theta_max], (K, 3)).T
+    C = r_[:,np.newaxis] * np.column_stack((np.cos(phi_) * np.sin(theta_), np.sin(phi_) * np.sin(theta_), np.cos(theta_)))
+    
+    n1 = np.column_stack((C[:,1], -C[:,0], np.zeros(K)))
+    n1_norm = np.linalg.norm(n1, axis=1)
+    n1 /= n1_norm[:,np.newaxis]
+    C_norm = np.linalg.norm(C, axis=1)
+    cos_psi1 = - C[:,2] / C_norm
+    sin_psi1 = n1_norm / C_norm
+    R1 = rotate_around_axis(n1, cos_psi1, sin_psi1)
+
+    psi2 = np.arctan(R1[:,1,0] / np.cross(R1[:,:,0], R1[:,:,2])[:,1])
+    cos_psi2, sin_psi2 = np.cos(psi2), np.sin(psi2)
+    cos_sin_sign = np.sign(R1[:,1,1] * cos_psi2 - np.cross(R1[:,:,1], R1[:,:,2])[:,1] * sin_psi2)
+    cos_psi2 *= cos_sin_sign
+    sin_psi2 *= cos_sin_sign
+    n2 = R1[:,:,2]
+    R2 = rotate_around_axis(n2, cos_psi2, sin_psi2)
+
+    R = R2 @ R1
+
+    if sigma is not None:
+        C += np.random.normal(0.0, sigma, (K, 3))
+
+    return C, R
+
+
+def find_bounding_box(A, b):
+    # ищется box (необязательно ограниченный), в который можно вписать область A @ x >= b
+    c = np.zeros(3)
+    result = linprog(c, A_ub=-A, b_ub=-b, bounds=[(None, None)] * A.shape[1])
+    if not result.success:
+        raise ValueError('The space is empty')
+    
+    bounds = np.zeros((3, 2))
+    for i in range(3):
+        # минимизация x_i
+        c_min = np.zeros(3)
+        c_min[i] = 1.0
+        res_min = linprog(c_min, A_ub=-A, b_ub=-b, bounds=[(None, None)] * A.shape[1])
+        
+        # максимизация x_i (минимизация -x_i)
+        c_max = np.zeros(3)
+        c_max[i] = -1.0
+        res_max = linprog(c_max, A_ub=-A, b_ub=-b, bounds=[(None, None)] * A.shape[1])
+
+        min_val = res_min.fun if res_min.status == 0 else -np.inf
+        max_val = -res_max.fun if res_max.status == 0 else np.inf
+
+        bounds[i,0] = min_val
+        bounds[i,1] = max_val
+    
+    return bounds
+
+
+def form_view_matrices(C, R, W, H, phi_x):
+    ctan_phi_x_2 = 1.0 / np.tan(phi_x / 2.0)
+    ctan_phi_y_2 = W / H * ctan_phi_x_2
+
+    A = np.array([[-ctan_phi_x_2, 0.0, 1.0],
+                  [ ctan_phi_x_2, 0.0, 1.0],
+                  [0.0, -ctan_phi_y_2, 1.0],
+                  [0.0,  ctan_phi_y_2, 1.0]])
+    
+    AR = np.einsum('kl,jnl->jkn', A, R)
+    ARC = np.einsum('jkl,jl->jk', AR, C)
+
+    return AR, ARC
+
+
+def generate_points(N, AR, ARC, view_bounds, gen_bounds, seed):
+    bounds_both = np.stack((view_bounds, gen_bounds), axis=0)
+    bounds = np.zeros_like(view_bounds)
+    bounds[:,0] = bounds_both[:,:,0].max(axis=0)
+    bounds[:,1] = bounds_both[:,:,1].min(axis=0)
+
+    N_ = 0
+    X = np.zeros((N, 3))
+    np.random.seed(seed)
+    while N_ < N:
+        X_ = np.random.uniform(*bounds.T, (N - N_, 3))
+        ARX = np.einsum('jkl,il->ijk', AR, X_)
+        ids = np.where((ARX > ARC).all(axis=(1, 2)))[0]
+        X[N_:N_+ids.size] = X_[ids]
+        N_ += ids.size
+
+    return X
