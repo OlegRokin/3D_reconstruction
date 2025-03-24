@@ -93,8 +93,8 @@ def enforce_integer_argument(position):
     return decorator
 
 
-@enforce_integer_argument(2)
-def reverse_project(X_pix, W, H, C, Theta, phi_x, f=1.0, dir_only=False):
+@enforce_integer_argument(5)
+def reverse_project(X_pix, C, Theta, phi_x, W, H, f=1.0, dir_only=False):
     WH = np.array([W, H])
     X_pix_center = X_pix + 0.5
     X_proj = np.full((*X_pix.shape[:2], 3), f)
@@ -133,9 +133,9 @@ def nearest_dot(X, V):
     return x_sol
 
 
-@enforce_integer_argument(2)
-def find_dots(X_pix, W, H, C, Theta, phi_x):
-    X_proj = reverse_project(X_pix, W, H, C, Theta, phi_x, dir_only=True)
+@enforce_integer_argument(5)
+def find_dots(X_pix, C, Theta, phi_x, W, H):
+    X_proj = reverse_project(X_pix, C, Theta, phi_x, W, H, dir_only=True)
     nearest_dots = np.zeros((X_proj.shape[0], 3))
     for i, x_proj in enumerate(X_proj):
         j_notnan = np.where(~np.isnan(x_proj)[:,0])[0]
@@ -1335,7 +1335,6 @@ def get_X_from_C_Theta(X_pix, C, Theta, phi_x, W, H, normalized=False):
     RTC = np.concatenate((RT, - np.einsum('jkl,jl->jk', RT, C).reshape(-1, 3, 1)), axis=2)
 
     P = np.einsum('kl,jln->jkn', K_, RTC)
-    print(f'{P.shape = }')
 
     A_array = np.zeros((N, 2 * K, 4))
     A_array[:,::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
@@ -1378,12 +1377,14 @@ def get_C_Theta_from_X(X, X_pix, phi_x, W, H, normalized=False):
     A_array[:,1::2,8:12] = X_pix_center[:,:,1].T[:,:,np.newaxis] * X_hom
     A_array = np.nan_to_num(A_array)
 
-    # U, sigma, Vh = np.linalg.svd(A_array)
-    # P_array = Vh[:,-1,:].reshape(K, 3, 4)
-    P_array = np.zeros((K, 3, 4))
-    for j in range(K):
-        w = eigsh(A_array[j].T @ A_array[j], k=1, which='SM')[1]
-        P_array[j] = w.reshape(3, 4)
+    if N * K <= 50000:
+        U, sigma, Vh = np.linalg.svd(A_array)
+        P_array = Vh[:,-1,:].reshape(K, 3, 4)
+    else:
+        P_array = np.zeros((K, 3, 4))
+        for j in range(K):
+            w = eigsh(A_array[j].T @ A_array[j], k=1, which='SM')[1]
+            P_array[j] = w.reshape(3, 4)
 
     RT = np.linalg.solve(K_, P_array)
 
