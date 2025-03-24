@@ -243,6 +243,9 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     X_pix_center = X_pix + 0.5
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), np.array([phi_x_0])
 
+    if C_Theta_mask:
+        D_Rx, D_Ry, D_Rz = np.zeros((3, K, 3, 3))
+
     D = dict()
     D['X_model', 'X_rot'] = np.zeros((N, K, 2, 3))
     if C_Theta_mask: D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
@@ -251,7 +254,9 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         returns_dict = dict()
         
         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
-        if calc_Rs: Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
+        if calc_Rs:
+            # print('Calculating Rx, Ry, Rz in inner_transform')
+            Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
         if R is None:
             R_ = Ry @ Rx @ Rz
             returns_dict['R'] = R_
@@ -320,7 +325,8 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         transform_kwargs = dict()
         if not calculate_R: transform_kwargs['R'] = R
         if not phi_x_mask: transform_kwargs['f'] = f
-        calculate_Rs = C_Theta_mask or iters == 0
+        # calculate_Rs = C_Theta_mask or iters == 0
+        calculate_Rs = iters == 0
         transorm_res_list, transorm_res_dict = inner_transform(X, C, Theta, phi_x, calc_Rs=calculate_Rs, **transform_kwargs)
         if calculate_Rs: X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_list
         else: X_diff, X_rot, X_tr = transorm_res_list
@@ -375,9 +381,40 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
 
         if C_Theta_mask:
-            D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
-            D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
-            D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
+            # D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
+            # D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
+            # D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
+
+            if not calculate_Rs and not manager_res_list:
+                # print('Calculating Rx, Ry, Rz in for')
+                Rx[:,1,1] = Rx[:,2,2] = np.sign(np.pi - (Theta[:,0] + np.pi/2.0) % (2.0*np.pi)) * np.sqrt(R[:,1,0]**2 + R[:,1,1]**2)
+                # Rx[:,1,1] = Rx[:,2,2] = np.cos(Theta[:,0])
+                Rx[:,1,2] = R[:,1,2]
+                Rx[:,2,1] = - Rx[:,1,2]
+
+                Ry[:,0,0] = Ry[:,2,2] = R[:,2,2] / Rx[:,1,1]
+                Ry[:,0,2] = R[:,0,2] / Rx[:,1,1]
+                Ry[:,2,0] = - Ry[:,0,2]
+
+                Rz[:,0,0] = Rz[:,1,1] = R[:,1,1] / Rx[:,1,1]
+                Rz[:,1,0] = R[:,1,0] / Rx[:,1,1]
+                Rz[:,0,1] = - Rz[:,1,0]
+
+            D_Rx[:,1,1] = D_Rx[:,2,2] = Rx[:,1,2]
+            D_Rx[:,2,1] = Rx[:,1,1]
+            D_Rx[:,1,2] = - D_Rx[:,2,1]
+
+            D_Ry[:,0,0] = D_Ry[:,2,2] = Ry[:,2,0]
+            D_Ry[:,0,2] = Ry[:,0,0]
+            D_Ry[:,2,0] = - D_Ry[:,0,2]
+
+            D_Rz[:,0,0] = D_Rz[:,1,1] = Rz[:,0,1]
+            D_Rz[:,1,0] = Rz[:,0,0]
+            D_Rz[:,0,1] = - D_Rz[:,1,0]
+
+            D['R', 'Theta'][:,:,:,0] = Ry @ D_Rx @ Rz
+            D['R', 'Theta'][:,:,:,1] = D_Ry @ Rx @ Rz
+            D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ D_Rz
 
             D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
             D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
@@ -1293,23 +1330,23 @@ def get_Theta(R, orthogonolize=False):
     return Theta
 
 
-def get_R(x, y):
-    v = np.cross(x, y)
-    v_norm = np.linalg.norm(v)
-    if v_norm > 0.0:
-        xy = np.linalg.norm(x) * np.linalg.norm(y)
-        n = v / v_norm
-        sin_phi = v_norm / xy
-        cos_phi = np.dot(x, y) / xy
+# def get_R(x, y):
+#     v = np.cross(x, y)
+#     v_norm = np.linalg.norm(v)
+#     if v_norm > 0.0:
+#         xy = np.linalg.norm(x) * np.linalg.norm(y)
+#         n = v / v_norm
+#         sin_phi = v_norm / xy
+#         cos_phi = np.dot(x, y) / xy
 
-        R = cos_phi * np.eye(3)
-        R += (1 - cos_phi) * (n.reshape(-1, 1) @ n.reshape(1, -1))
-        R += sin_phi * np.array([[  0.0, -n[2],  n[1]],
-                                 [ n[2],  0.0,  -n[0]],
-                                 [-n[1],  n[0],   0.0]])
-    else:
-        R = np.eye(3)
-    return R
+#         R = cos_phi * np.eye(3)
+#         R += (1 - cos_phi) * (n.reshape(-1, 1) @ n.reshape(1, -1))
+#         R += sin_phi * np.array([[  0.0, -n[2],  n[1]],
+#                                  [ n[2],  0.0,  -n[0]],
+#                                  [-n[1],  n[0],   0.0]])
+#     else:
+#         R = np.eye(3)
+#     return R
 
 
 def get_X_from_C_Theta(X_pix, C, Theta, phi_x, W, H, normalized=False):
