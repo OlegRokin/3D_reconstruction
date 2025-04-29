@@ -16,8 +16,12 @@ from tqdm import tqdm
 
 
 def error(X_pix, X_model):
-    X_visible = ~np.isnan(X_pix)[:,:,0]
+    # X_visible = ~np.isnan(X_pix)[:,:,0]
+    # X_pix_center = X_pix + 0.5
+    # X_diff = np.nan_to_num(X_model - X_pix_center).ravel()
+    X_visible = X_pix[:,:,0] >= 0
     X_pix_center = X_pix + 0.5
+    X_pix_center[~X_visible] = np.nan
     X_diff = np.nan_to_num(X_model - X_pix_center).ravel()
     return np.dot(X_diff, X_diff) / (2 * X_visible.sum())
 
@@ -73,15 +77,17 @@ def ryxz(Theta):
 
 def project(X, C, Theta, f=1.0, dir_only=False):
     R = ryxz(Theta)
-    X_rot = np.einsum('jlk,ijl->ijk', R, X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    # X_rot = np.einsum('jlk,ijl->ijk', R, X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    X_rot = ((X[:,np.newaxis,:] - C[np.newaxis,:,:]).transpose(1, 0, 2) @ R).transpose(1, 0, 2)     # np.einsum('jlk,ijl->ijk', R, X[:,np.newaxis,:] - C[np.newaxis,:,:])
     X_proj = np.full_like(X_rot, f)
     X_proj[:,:,:2] = f * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
-    X_proj = np.einsum('jkl,ijl->ijk', R, X_proj)
+    # X_proj = np.einsum('jkl,ijl->ijk', R, X_proj)
+    X_proj = (X_proj.transpose(1, 0, 2) @ R.transpose(0, 2, 1)).transpose(1, 0, 2)      # np.einsum('jkl,ijl->ijk', R, X_proj)
     if dir_only: return X_proj
     else: return X_proj + C[np.newaxis,:,:]
 
 
-def enforce_integer_argument(position):
+def enforce_int_img_arg(position):
     """
     Check if function argument in the position is H instead of r.
     """
@@ -96,21 +102,24 @@ def enforce_integer_argument(position):
     return decorator
 
 
-@enforce_integer_argument(5)
+@enforce_int_img_arg(5)
 def reverse_project(X_pix, C, Theta, phi_x, W, H, f=1.0, dir_only=False):
     WH = np.array([W, H])
     X_pix_center = X_pix + 0.5
+    X_pix_center[X_pix[:,:,0] < 0] = np.nan
     X_proj = np.full((*X_pix.shape[:2], 3), f)
     X_proj[:,:,:2] = f * np.tan(phi_x / 2.0) / W * (2.0 * X_pix_center[:,:,:2] - WH)
-    X_proj = np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
+    # X_proj = np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
+    X_proj = (X_proj.transpose(1, 0, 2) @ ryxz(Theta).transpose(0, 2, 1)).transpose(1, 0, 2)        # np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
     if dir_only: return X_proj
     else: return X_proj + C[np.newaxis,:,:]
 
 
-@enforce_integer_argument(5)
+@enforce_int_img_arg(5)
 def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary_points=False):
     WH = np.array([W, H])
-    X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    # X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    X_rot = ((X[:,np.newaxis,:] - C[np.newaxis,:,:]).transpose(1, 0, 2) @ ryxz(Theta)).transpose(1, 0, 2)       # np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
     if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = (W / np.tan(phi_x / 2.0) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH) / 2.0
     if delete_boundary_points:
@@ -120,8 +129,9 @@ def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary
 
 
 def distance(X, C, Theta):
-    X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
-    return X_rot[:,:,2]
+    # X_rot = np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
+    # return X_rot[:,:,2]
+    return np.einsum('jl,ijl->ij', ryxz(Theta)[:,:,2], X[:,np.newaxis,:] - C[np.newaxis,:,:])
 
 
 # def nearest_dot(X, V):
@@ -151,13 +161,14 @@ def distance(X, C, Theta):
 
 
 def sgd(x, grad_x, lr):
-    return x - lr * grad_x, {}
+    x_new = x - lr * grad_x
+    return x_new, {}
 
 def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
-    s_new = rho_1 * s + (1 - rho_1) * grad_x
-    r_new = rho_2 * r + (1 - rho_2) * grad_x**2
-    s_corr = s_new / (1 - rho_1**t)
-    r_corr = r_new / (1 - rho_2**t)
+    s_new = rho_1 * s + (1.0 - rho_1) * grad_x
+    r_new = rho_2 * r + (1.0 - rho_2) * grad_x**2
+    s_corr = s_new / (1.0 - rho_1**t)
+    r_corr = r_new / (1.0 - rho_2**t)
     x_new = x - lr * s_corr / (1e-12 + np.sqrt(r_corr))
     t_new = t + 1
     return x_new, {'s': s_new, 'r': r_new, 't': t_new}
@@ -170,6 +181,7 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
 
     lr_, iters_, E_min_, E_min_temp_ = lr, iters, E_min, E_min_temp
     patience_timer_, success_timer_, began_decreasing_, increased_ = patience_timer, success_timer, began_decreasing, increased
+    
     if iters_ == 0:
         E_min_ = E[iters]
     else:
@@ -238,15 +250,17 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
     return returns_tuple, returns_list
 
 
-@enforce_integer_argument(2)
+@enforce_int_img_arg(2)
 def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, C_Theta_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000,
         factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
     N, K = X_pix.shape[:2]
     WH_2 = np.array([W, H]) / 2.0
-    X_visible = ~np.isnan(X_pix)[:,:,0]
+    # X_visible = ~np.isnan(X_pix)[:,:,0]
+    X_visible = X_pix[:,:,0] >= 0
     NK_nan = X_visible.sum()
     X_pix_center = X_pix + 0.5
+    X_pix_center[~X_visible] = np.nan
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), np.array([phi_x_0])
 
     if C_Theta_mask:
@@ -268,7 +282,8 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             returns_dict['R'] = R_
         else:
             R_ = R
-        X_rot = np.einsum('jlk,ijl->ijk', R_, X_tr)
+        # X_rot = np.einsum('jlk,ijl->ijk', R_, X_tr)
+        X_rot = (X_tr.transpose(1, 0, 2) @ R_).transpose(1, 0, 2)       # np.einsum('jlk,ijl->ijk', R_, X_tr)
 
         if f is None:
             f_ = W / 2.0 / np.tan(phi_x / 2.0)
@@ -278,12 +293,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_model = f_ * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH_2
         X_diff = np.nan_to_num(X_model - X_pix_center)
 
-        # returns_list = [X_diff, X_rot, X_tr]
-        returns_tuple = (X_diff, X_rot, X_tr)
-        # if calc_Rs: returns_list.extend([Rx, Ry, Rz])
-
-        # return returns_list, returns_dict
-        return returns_tuple, returns_dict
+        return (X_diff, X_rot, X_tr), returns_dict
 
     if not phi_x_mask:
         f = W / 2.0 / np.tan(phi_x / 2.0)
@@ -321,26 +331,16 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
     if ret_arrays:
         for key, val in params.items():
-            # val['list'] = []
             val['list'] = max_iters * [None]
 
     iters = 0
     while iters < max_iters:
-        # if ret_arrays:
-        #     for key, val in params.items():
-        #         val['list'].append(val['main'].copy())
-
         calculate_R = (iters == 0 and X_mask) or not X_mask
         transform_kwargs = dict()
         if not calculate_R: transform_kwargs['R'] = R
         if not phi_x_mask: transform_kwargs['f'] = f
-        # calculate_Rs = C_Theta_mask or iters == 0
         calculate_Rs = iters == 0
-        # transorm_res_list, transorm_res_dict = inner_transform(X, C, Theta, phi_x, calc_Rs=calculate_Rs, **transform_kwargs)
         transorm_res_tuple, transorm_res_dict = inner_transform(X, C, Theta, phi_x, calc_Rs=calculate_Rs, **transform_kwargs)
-        # if calculate_Rs: X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_list
-        # else: X_diff, X_rot, X_tr = transorm_res_list
-        # X_diff, X_rot, X_tr = transorm_res_list
         X_diff, X_rot, X_tr = transorm_res_tuple
         if calculate_Rs: Rx, Ry, Rz = transorm_res_dict['Rx'], transorm_res_dict['Ry'], transorm_res_dict['Rz']
         if calculate_R: R = transorm_res_dict['R']
@@ -361,11 +361,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if manager_res_list:
             # предполагается, что manager_res_list имеет максимальную длину 1
-            # transorm_res_list, transorm_res_dict = manager_res_list[0]
             transorm_res_tuple, transorm_res_dict = manager_res_list[0]
-            # if C_Theta_mask: X_diff, X_rot, X_tr, Rx, Ry, Rz = transorm_res_list
-            # else: X_diff, X_rot, X_tr = transorm_res_list
-            # X_diff, X_rot, X_tr = transorm_res_list
             X_diff, X_rot, X_tr = transorm_res_tuple
             if C_Theta_mask:
                 Rx, Ry, Rz, R = transorm_res_dict['Rx'], transorm_res_dict['Ry'], transorm_res_dict['Rz'], transorm_res_dict['R']
@@ -391,18 +387,16 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         D['X_model', 'X_rot'][:,:,0,0] = D['X_model', 'X_rot'][:,:,1,1] = f / X_rot[:,:,2]
         D['X_model', 'X_rot'][:,:,:,2] = - f / (X_rot[:,:,2]**2)[:,:,np.newaxis] * X_rot[:,:,:2]
 
-        D['X_model', 'X'] = np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
+        # D['X_model', 'X'] = np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
+        D['X_model', 'X'] = D['X_model', 'X_rot'] @ R.transpose(0, 2, 1)[np.newaxis,:,:,:]      # np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
 
         D['E', 'X_model'] = X_diff / NK_nan
 
         if X_mask:
-            D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
+            # D['E', 'X'] = np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
+            D['E', 'X'] = (D['E', 'X_model'].reshape(N, -1)[:,np.newaxis,:] @ D['X_model', 'X'].reshape(N, -1, 3))[:,0,:]       # np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
 
         if C_Theta_mask:
-            # D['R', 'Theta'][:,:,:,0] = Ry @ d_rx(Theta[:,0]) @ Rz
-            # D['R', 'Theta'][:,:,:,1] = d_ry(Theta[:,1]) @ Rx @ Rz
-            # D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ d_rz(Theta[:,2])
-
             if not calculate_Rs and not manager_res_list:
                 Rx[:,1,1] = Rx[:,2,2] = np.sign(np.pi - (Theta[:,0] + np.pi/2.0) % (2.0*np.pi)) * np.sqrt(R[:,1,0]**2 + R[:,1,1]**2)
                 # Rx[:,1,1] = Rx[:,2,2] = np.cos(Theta[:,0])
@@ -433,11 +427,15 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             D['R', 'Theta'][:,:,:,1] = D_Ry @ Rx @ Rz
             D['R', 'Theta'][:,:,:,2] = Ry @ Rx @ D_Rz
 
-            D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
-            D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
+            # D['X_rot', 'Theta'] = np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
+            D['X_rot', 'Theta'] = (X_tr.transpose(1, 0, 2) @ D['R', 'Theta'].reshape(K, 3, 9)).reshape(K, N, 3, 3).transpose(1, 0, 2, 3)        # np.einsum('jnkl,ijn->ijkl', D['R', 'Theta'], X_tr)
+            # D['X_model', 'Theta'] = np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
+            D['X_model', 'Theta'] = D['X_model', 'X_rot'] @ D['X_rot', 'Theta']         # np.einsum('ijkn,ijnl->ijkl', D['X_model', 'X_rot'], D['X_rot', 'Theta'])
 
-            D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
-            D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
+            # D['E', 'C'] = - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
+            D['E', 'C'] = - (D['E', 'X_model'].transpose(1, 0, 2).reshape(K, -1)[:,np.newaxis,:] @ D['X_model', 'X'].transpose(1, 0, 2, 3).reshape(K, -1, 3))[:,0,:]        #  - np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'X'])
+            # D['E', 'Theta'] = np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
+            D['E', 'Theta'] = (D['E', 'X_model'].transpose(1, 0, 2).reshape(K, -1)[:,np.newaxis,:] @ D['X_model', 'Theta'].transpose(1, 0, 2, 3).reshape(K, -1, 3))[:,0,:]      # np.einsum('ijl,ijlk->jk', D['E', 'X_model'], D['X_model', 'Theta'])
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - f / np.sin(phi_x) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
@@ -468,7 +466,8 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
 def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam', patience=1000,
                factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
-    P = X.shape[1]
+    # P = X.shape[1]
+    N, P = X.shape[:2]
     X_visible = ~np.isnan(X)[:,:,0]
     NP_nan = X_visible.sum()
     
@@ -496,16 +495,15 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         else:
             R_ = R
         
-        X_rot = np.einsum('jkl,ijl->ijk', R_, X)
+        # X_rot = np.einsum('jkl,ijl->ijk', R_, X)
+        X_rot = (X.transpose(1, 0, 2) @ R_).transpose(1, 0, 2)       # np.einsum('jkl,ijl->ijk', R_, X)
         X_new = S[np.newaxis,:,np.newaxis] * X_rot + T
         if ret_X_new:
             returns_dict['X_new'] = X_new
         X_mean = np.nanmean(X_new, axis=1, keepdims=True)
         X_diff = X_new - X_mean
 
-        returns_tuple = (X_diff, X_rot)
-
-        return returns_tuple, returns_dict
+        return (X_diff, X_rot), returns_dict
     
     params_names = ['S', 'T', 'Psi']
 
@@ -549,7 +547,7 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         if calculate_Rs: Rx, Ry, Rz = transorm_res_dict['Rx'], transorm_res_dict['Ry'], transorm_res_dict['Rz']
         if calculate_R: R = transorm_res_dict['R']
 
-        E[iters] = np.dot(np.nan_to_num(X_diff).ravel(), np.nan_to_num(X_diff).ravel()) / (2 * NP_nan)
+        E[iters] = np.dot(np.nan_to_num(X_diff).ravel(), np.nan_to_num(X_diff).ravel()) / (2.0 * NP_nan)
 
         manager_res_tuple, manager_res_list = lr_manager(lr, iters, E, E_min, E_min_temp,
                                                          patience_timer, success_timer, began_decreasing, increased,
@@ -582,9 +580,11 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
 
         if iters % print_step == 0: print(f'{iters} : {E_min}')
 
-        D['E', 'S'] = 2 * np.einsum('ijk,ijk->j', np.nan_to_num(X_diff - np.nanmean(X_diff, axis=1, keepdims=True)), np.nan_to_num(X_rot)) / NP_nan
+        X_diff_centered = np.nan_to_num(X_diff - np.nanmean(X_diff, axis=1, keepdims=True))
+
+        D['E', 'S'] = 2.0 / NP_nan * np.einsum('ijk,ijk->j', X_diff_centered, np.nan_to_num(X_rot))
         
-        D['E', 'T'] = 2 * np.sum(np.nan_to_num(X_diff - np.nanmean(X_diff, axis=1, keepdims=True)), axis=0) / NP_nan
+        D['E', 'T'] = 2.0 / NP_nan * np.sum(X_diff_centered, axis=0)
 
         if not calculate_Rs and not manager_res_list:
             Rx[:,1,1] = Rx[:,2,2] = np.sign(np.pi - (Psi[:,0] + np.pi/2.0) % (2.0*np.pi)) * np.sqrt(R[:,1,0]**2 + R[:,1,1]**2)
@@ -615,8 +615,12 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         D['R', 'Psi'][:,:,:,1] = D_Ry @ Rx @ Rz
         D['R', 'Psi'][:,:,:,2] = Ry @ Rx @ D_Rz
 
-        D['X_rot', 'Psi'] = np.einsum('jknl,ijn->ijkl', D['R', 'Psi'], np.nan_to_num(X))
-        D['E', 'Psi'] = 2 * (np.einsum('ijn,j,ijnk->jk', np.nan_to_num(X_diff - np.nanmean(X_diff, axis=1, keepdims=True)), S, D['X_rot', 'Psi'])) / NP_nan
+        # D['X_rot', 'Psi'] = np.einsum('jknl,ijn->ijkl', D['R', 'Psi'], np.nan_to_num(X))
+        D['X_rot', 'Psi'] = (np.nan_to_num(X).transpose(1, 0, 2) \
+                             @ D['R', 'Psi'].transpose(0, 2, 1, 3).reshape(P, 3, 9)).reshape(P, N, 3, 3).transpose(1, 0, 2, 3)      # np.einsum('jknl,ijn->ijkl', D['R', 'Psi'], np.nan_to_num(X))
+        # D['E', 'Psi'] = 2.0 * np.einsum('ijn,j,ijnk->jk', X_diff_centered, S, D['X_rot', 'Psi']) / NP_nan
+        D['E', 'Psi'] = 2.0 / NP_nan * ((X_diff_centered.transpose(1, 0, 2).reshape(P, 3 * N) * S[:,np.newaxis])[:,np.newaxis,:] \
+                                        @ D['X_rot', 'Psi'].transpose(1, 0, 2, 3).reshape(P, 3 * N, 3))[:,0,:]        # np.einsum('ijn,j,ijnk->jk', X_diff_centered, S, D['X_rot', 'Psi'])
 
         for key, val in params.items():
             gd_result, gd_results_dict = gd_func_dict[optimizer](val['main'], D['E', key], lr, **val['gd'])
@@ -626,8 +630,9 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
 
         R[:] = ryxz(Psi)
         # T[:] = np.einsum('kl,jk->jl', R[0], T - T[0]) / S[0]
-        T[:] = (T - T[0]) @ R[0] / S[0]
-        R[:] = np.einsum('kl,jkn->jln', R[0], R)
+        T[:] = (T - T[0]) @ R[0] / S[0]     # np.einsum('kl,jk->jl', R[0], T - T[0]) / S[0]
+        # R[:] = np.einsum('kl,jkn->jln', R[0], R)
+        R[:] = R[0].T @ R       # np.einsum('kl,jkn->jln', R[0], R)
         Psi[:] = get_Theta(R)
         S[:] = np.abs(S)
         S[:] /= S[0]
@@ -688,7 +693,8 @@ def adapt_X_sets(X, normalize=False):
     Q[1:] = w[: 9*(P-1)].reshape(P - 1, 3, 3)
     T[1:] = w[9*(P-1) :].reshape(P - 1, 3)
 
-    X_new = np.einsum('jkl,ijl->ijk', Q, X) + T
+    # X_new = np.einsum('jkl,ijl->ijk', Q, X) + T
+    X_new = (X.transpose(1, 0, 2) @ Q.transpose(0, 2, 1)).transpose(1, 0, 2) + T        # np.einsum('jkl,ijl->ijk', Q, X)
     X_mean = np.nanmean(X_new, axis=1, keepdims=True)
     X_diff = np.nan_to_num(X_new - X_mean).ravel()
     NP_nan = X_visible.sum()
@@ -702,12 +708,13 @@ def adapt_X_sets(X, normalize=False):
 
     Psi = get_Theta(R)
 
-    X_new = S[np.newaxis,:,np.newaxis] * np.einsum('jkl,ijl->ijk', R, X) + T
+    # X_new = S[np.newaxis,:,np.newaxis] * np.einsum('jkl,ijl->ijk', R, X) + T
+    X_new = S[np.newaxis,:,np.newaxis] * (X.transpose(1, 0, 2) @ R.transpose(0, 2, 1)).transpose(1, 0, 2) + T       # np.einsum('jkl,ijl->ijk', R, X)
 
     X_mean = np.nanmean(X_new, axis=1, keepdims=True)
     X_diff = np.nan_to_num(X_new - X_mean).ravel()
     NP_nan = X_visible.sum()
-    print(f'E = {np.dot(X_diff, X_diff) / (2 * NP_nan)}')
+    print(f'E = {np.dot(X_diff, X_diff) / (2.0 * NP_nan)}')
 
     return X_new, S, T, Psi
 
@@ -815,9 +822,12 @@ def normalize_scene(X, C, main_indexes=None, R_scale=1.0, ret_j=False):
         j0 = 0
         j1 = 1 + np.argmax(np.linalg.norm(C[1:] - C[0], axis=1))
     else: j0, j1 = main_indexes
+
     scale = np.linalg.norm(C[j1] - C[j0])
-    X_new = X * R_scale / scale
-    C_new = C * R_scale / scale
+    factor = R_scale / scale
+    X_new = X * factor
+    C_new = C * factor
+
     if not ret_j: return X_new, C_new
     else: return X_new, C_new, j1
 
@@ -1115,7 +1125,8 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     R = ryxz(Theta_array[t_slider.val, j_ids])
     camera_dir = np.array([0.0, 0.0, 1.0])
-    camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+    # camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+    camera_dir_rot = R @ camera_dir     # np.einsum('jkl,l->jk', R, camera_dir)
     tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2.0)
     tan_phi_y_2 = H / W * tan_phi_x_2
     camera_corners = np.array([[  tan_phi_x_2,   tan_phi_y_2, 1.0],
@@ -1185,7 +1196,8 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
     def update(val):
         R = ryxz(Theta_array[t_slider.val,j_ids])
-        camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+        # camera_dir_rot = np.einsum('jkl,l->jk', R, camera_dir)
+        camera_dir_rot = R @ camera_dir     # np.einsum('jkl,l->jk', R, camera_dir)
         tan_phi_x_2 = np.tan(phi_x_array[t_slider.val] / 2.0)
         tan_phi_y_2 = H / W * tan_phi_x_2
         camera_corners = np.array([[  tan_phi_x_2,   tan_phi_y_2, 1.0],
@@ -1245,7 +1257,8 @@ def get_Theta(R, orthogonolize=False):
     if orthogonolize:
         R, _ = orthogonolize_R(R)
     else:
-        if (np.abs(np.einsum('jkl,jkn->jln', R, R) - np.eye(3)) > 1e-9).any():
+        # if (np.abs(np.einsum('jkl,jkn->jln', R, R) - np.eye(3)) > 1e-9).any():
+        if (np.abs(R.transpose(0, 2, 1) @ R - np.eye(3)) > 1e-9).any():
             raise ValueError('Expected R[i] to be normal for all i (R[i] @ R[i].T must be approximately equal to eye(3)).')
         if (np.abs(np.linalg.det(R) - 1.0) > 1e-9).any():
             raise ValueError('Expected R[i] to have determinant approximately 1.0 for all i.')
@@ -1254,7 +1267,9 @@ def get_Theta(R, orthogonolize=False):
     S_x = - R[:,1,2]
     C_y, S_y = R[:,2,2] / C_x, R[:,0,2] / C_x
     C_z, S_z = R[:,1,1] / C_x, R[:,1,0] / C_x
-    Theta = np.column_stack((np.arctan2(S_x, C_x), np.arctan2(S_y, C_y), np.arctan2(S_z, C_z)))
+    Theta = np.column_stack((np.arctan2(S_x, C_x),
+                             np.arctan2(S_y, C_y),
+                             np.arctan2(S_z, C_z)))
     return Theta
 
 
@@ -1297,25 +1312,32 @@ def get_X_from_C_Theta(X_pix, C, Theta, phi_x, W, H, method='LT', normalized=Fal
                        [0.0, f_y, p_y],
                        [0.0, 0.0, 1.0]])
         
-        RT = np.transpose(ryxz(Theta), (0, 2, 1))
-        RTC = np.concatenate((RT, - np.einsum('jkl,jl->jk', RT, C).reshape(-1, 3, 1)), axis=2)
+        # RT = np.transpose(ryxz(Theta), (0, 2, 1))
+        RT = ryxz(Theta).transpose(0, 2, 1)
+        # RTC = np.concatenate((RT, - np.einsum('jkl,jl->jk', RT, C).reshape(-1, 3, 1)), axis=2)
+        RTC = np.concatenate((RT, - (RT @ C).reshape(-1, 3, 1)), axis=2)        # np.einsum('jkl,jl->jk', RT, C)
 
-        P = np.einsum('kl,jln->jkn', K_, RTC)
+        # P = np.einsum('kl,jln->jkn', K_, RTC)
+        P = K_ @ RTC    # np.einsum('kl,jln->jkn', K_, RTC)
 
         A_array = np.zeros((N, 2 * K, 4))
-        A_array[:,::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+        A_array[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
         A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
         A_array = np.nan_to_num(A_array)
 
         A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
-        lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
-        lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        # lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        lstsq_mat = A_array_mat.transpose(0, 2, 1) @ A_array_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        # lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        lstsq_vec = A_array_mat.transpose(0, 2, 1) @ A_array_vec        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
         X = - np.linalg.solve(lstsq_mat, lstsq_vec)
     
     elif method == 'GT':
         V = reverse_project(X_pix, C, Theta, phi_x, W, H, dir_only=True)
         V /= np.linalg.norm(V, axis=2, keepdims=True)
-        eye_VVt = np.eye(3) - np.einsum('ijk,ijl->ijkl', V, V)
+        V_flat = V.reshape(N * K, 3)
+        # eye_VVt = np.eye(3) - np.einsum('ijk,ijl->ijkl', V, V)
+        eye_VVt = np.eye(3) - (V_flat[:,:,np.newaxis] @ V_flat[:,np.newaxis,:]).reshape(N, K, 3, 3)     #  np.einsum('ijk,ijl->ijkl', V, V)
         X = np.linalg.solve((eye_VVt).sum(axis=1), np.einsum('ijkl,jl->ijk', eye_VVt, C).sum(axis=1))
 
     return X
@@ -1363,8 +1385,10 @@ def get_C_Theta_from_X(X, X_pix, phi_x, W, H, normalized=False):
     R, T = RT[:,:,:3], RT[:,:,3]
 
     U, sigma, Vh = np.linalg.svd(R)
-    R_rot = np.transpose(U @ Vh, (0, 2, 1))
-    C = - np.einsum('jkl,jl->jk', R_rot, T) / sigma.mean(axis=1, keepdims=True)
+    # R_rot = np.transpose(U @ Vh, (0, 2, 1))
+    R_rot = (U @ Vh).transpose(0, 2, 1)
+    # C = - np.einsum('jkl,jl->jk', R_rot, T) / sigma.mean(axis=1, keepdims=True)
+    C = - (R_rot @ T) / sigma.mean(axis=1, keepdims=True)
     R_rot *= np.sign(np.linalg.det(R_rot))[:,np.newaxis,np.newaxis]
 
     Theta = get_Theta(R_rot)
@@ -1483,8 +1507,10 @@ def get_X_C_Theta_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=Fal
         A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
 
         A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
-        lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
-        lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        # lstsq_mat = np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        lstsq_mat = A_array_mat.transpose(0, 2, 1) @ A_array_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        # lstsq_vec = np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        lstsq_vec = A_array_mat.transpose(0, 2, 1) @ A_array_vec        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
         X = - np.linalg.solve(lstsq_mat, lstsq_vec)
         
         C = np.vstack((np.zeros(3), - R.T @ t))
@@ -1592,7 +1618,8 @@ def find_phi_x(X_pix, W, H, i_size_matrix, H_diff_matrix, H_diff_opt, attempts=5
             R_test = ryxz(Theta_test)
             X_test_rot = np.zeros((*X_test.shape[:2], 2, 3))
             X_test_rot[:,:,0,:] = X_test
-            X_test_rot[:,:,1,:] = np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
+            # X_test_rot[:,:,1,:] = np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
+            X_test_rot[:,:,1,:] = (X_test - C_test[:,np.newaxis,:]) @ R_test        # np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
             X_model_test = (W / np.tan(phi_x_test / 2)[:,np.newaxis,np.newaxis,np.newaxis] * X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] + WH) / 2.0
             X_pix_center = X_pix[ij_subset] + 0.5
             X_diff = X_model_test - X_pix_center
@@ -1770,7 +1797,8 @@ def rotate_around_axis(n, cos_phi, sin_phi):
     R3[:,0,1] = -n[:,2]
     R3[:,0,2] = n[:,1]
     R3[:,1,2] = -n[:,0]
-    R3 -= np.transpose(R3, (0, 2, 1))
+    # R3 -= np.transpose(R3, (0, 2, 1))
+    R3 -= R3.transpose(0, 2, 1)
 
     return cos_phi[:,np.newaxis,np.newaxis] * R1 + (1.0 - cos_phi[:,np.newaxis,np.newaxis]) * R2 + sin_phi[:,np.newaxis,np.newaxis] * R3
 
