@@ -74,12 +74,12 @@ def error(X_pix, X_model):
 
     X_pix_visible = X_pix[:,:,0] >= 0
     X_model_visible = ~np.isnan(X_model)[:,:,0]
-    X_visible = X_pix_visible * X_model_visible
-    X_pix_center_flat = X_pix[~X_visible].ravel() + 0.5
-    X_model_flat = X_model[~X_visible].ravel()
+    X_both_visible = X_pix_visible * X_model_visible
+    X_pix_center_flat = X_pix[~X_both_visible].ravel() + 0.5
+    X_model_flat = X_model[~X_both_visible].ravel()
     X_diff = X_model_flat - X_pix_center_flat
 
-    return np.dot(X_diff, X_diff) / (2 * X_visible.sum())
+    return np.dot(X_diff, X_diff) / (2 * X_both_visible.sum())
 
 
 def rx(theta):
@@ -380,7 +380,6 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
 def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         X_mask=True, C_Theta_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000,
         factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
-    # N, K = X_pix.shape[:2]
     N, K = validate_scene_arrays_shapes(X=X_0, C=C_0, Theta=Theta_0, X_pix=X_pix, ret_shapes=True)
 
     WH_2 = np.array([W, H]) / 2.0
@@ -795,7 +794,6 @@ def adapt_X_sets(X, normalize=False):
 
     start_time = time.time()
 
-    # N, P = X.shape[:2]
     X_visible = ~np.isnan(X)[:,:,0]
 
     print(f'Calculating A:\t\t{time.time() - start_time}')
@@ -873,7 +871,7 @@ def adapt_X_sets(X, normalize=False):
 #     elif image.ndim == 3: return pixels.reshape(image.shape[0], -1, 2).transpose(1, 0, 2)
 
 
-def optimal_subplot_layout(n_plots, r):
+def optimal_subplot_layout(n_plots):
     cols = np.ceil(np.sqrt(n_plots))
     rows = np.ceil(n_plots / cols)
     return int(rows), int(cols)
@@ -930,12 +928,10 @@ def draw_2d_views(axes, X_pix, W, H, X_model=None, object_corner_list=None, pict
 
 
 def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_paths=None,
-                     dist_scale=10.0, f=0.2, trajectory_markers=False, show_image_lines=False,
+                     dist_scale=10.0, f=0.2, frame_scale=1.0, trajectory_markers=False, show_image_lines=False,
                      axis_off=False, grid_off=False, ret_axis=False):
     N, K = validate_scene_arrays_shapes(X=X, C=C, Theta=Theta, X_pix=X_pix, ret_shapes=True)
     if image_paths is not None:
-        # if image_paths.size != X_pix.shape[1]:
-        #     raise ValueError('Expected image_paths.size == X_pix.shape[1]')
         if image_paths.size != K:
             raise ValueError('Expected image_paths.size == K')
 
@@ -958,10 +954,7 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     if axis_off: ax0.set_axis_off()
     if grid_off: ax0.grid(False)
 
-    # N = X.shape[0]
-
     R = ryxz(Theta[j_slider.val].reshape(1, -1), _validate=False)[0]
-    # camera_dir = np.array([0.0, 0.0, 1.0]).reshape(1, -1)
     camera_dir = np.array([[0.0, 0.0, 1.0]])
     camera_dir_rot = camera_dir @ R.T
     tan_phi_x_2 = np.tan(phi_x / 2.0)
@@ -982,15 +975,17 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     camera_corners_rot = rotate_array(camera_corners_rot, Ryz, _validate=False)
 
     X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
-                        delete_back_points=True, delete_boundary_points=True)[:,0,:]
-    # I_pix_visible = np.where(~np.isnan(X_pix[:,j_slider.val,0]))[0]
+                        delete_back_points=True, delete_boundary_points=False, _validate=False)[:,0,:]
     I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
     I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
+    I_model_boundary = np.where((X_model[:,0] < 0) | (X_model[:,0] >= W) | (X_model[:,1] < 0) | (X_model[:,1] >= H))[0]
+    I_model_boundary_visible = I_model_visible.copy()
+    I_model_visible = np.sort(np.array(list(set(I_model_visible) - set(I_model_boundary)), dtype=np.int64))
     I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
     I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
     # задавать alpha нормально не получается, возникают баги
     X_visible_points = ax0.scatter(*X_show[I_model_visible,:].T, marker='o', s=16, color='red', depthshade=False)
-    I_model_not_visible = np.array(list(set(np.arange(N)) - set(I_model_visible)), dtype=np.int64)
+    I_model_not_visible = np.array(list(set(range(N)) - set(I_model_visible)), dtype=np.int64)
     X_not_visible_points = ax0.scatter(*X_show[I_model_not_visible,:].T,  marker='o', s=12, color='red', depthshade=False, alpha=0.5)
 
     if not trajectory_markers:
@@ -1025,8 +1020,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
 
     ax1 = fig.add_subplot(1, 2, 2)
     assert isinstance(ax1, Axes)
-    ax1.set_xlim(0, W)
-    ax1.set_ylim(H, 0)
+    ax1.set_xlim((1.0-frame_scale)*W, frame_scale*W)
+    ax1.set_ylim(frame_scale*H, (1.0-frame_scale)*H)
     ax1.set_aspect('equal')
     ax1.set_xticks(np.linspace(0, W, 5))
     ax1.set_yticks(np.linspace(H, 0, 5))
@@ -1034,16 +1029,16 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     dist = distance(X, C, Theta, _validate=False)
     dist /= dist.max()
     if I_model_visible.size > 0:
-        X_model_points = ax1.scatter(*X_model[I_model_visible,:].T, s=dist_scale/dist[I_model_visible,j_slider.val],
-                                     marker='o', color='red', alpha=np.full(I_model_visible.size, 0.5)+0.5*np.isin(I_model_visible, I_both_visible), zorder=10)
+        X_model_points = ax1.scatter(*X_model[I_model_boundary_visible,:].T, s=dist_scale/dist[I_model_boundary_visible,j_slider.val],
+                                     marker='o', color='red', alpha=np.full(I_model_boundary_visible.size, 0.5)+0.5*np.isin(I_model_boundary_visible, I_both_visible), zorder=10)
     else:
         X_model_points = ax1.scatter([], [], marker='o', color='red', zorder=10)
 
     if X_pix is not None:
         X_pix_center = X_pix[:,j_slider.val,:] + 0.5
-        X_pix_points = ax1.scatter(*X_pix_center.T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
+        X_pix_points = ax1.scatter(*X_pix_center[I_pix_visible,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
         pix_corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
-        X_pix_squares = PolyCollection(X_pix[:,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
+        X_pix_squares = PolyCollection(X_pix[I_pix_visible,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
                                        linewidths=1.0, edgecolors='red', facecolor='none')
         ax1.add_collection(X_pix_squares)
 
@@ -1061,13 +1056,16 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
         C_current_point._offsets3d = C_show[j_slider.val,:].reshape(-1, 1)
 
         X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
-                            delete_back_points=True, delete_boundary_points=True, _validate=False)[:,0,:]
+                            delete_back_points=True, delete_boundary_points=False, _validate=False)[:,0,:]
         I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
         I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
+        I_model_boundary = np.where((X_model[:,0] < 0) | (X_model[:,0] >= W) | (X_model[:,1] < 0) | (X_model[:,1] >= H))[0]
+        I_model_boundary_visible = I_model_visible.copy()
+        I_model_visible = np.sort(np.array(list(set(I_model_visible) - set(I_model_boundary)), dtype=np.int64))
         I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
         I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
-        I_model_not_visible = np.array(list(set(np.arange(N)) - set(I_model_visible)), dtype=np.int64)
         X_visible_points._offsets3d = X_show[I_model_visible,:].T
+        I_model_not_visible = np.array(list(set(range(N)) - set(I_model_visible)), dtype=np.int64)
         X_not_visible_points._offsets3d = X_show[I_model_not_visible,:].T
 
         if show_image_lines:
@@ -1094,16 +1092,16 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
 
         if I_model_visible.size > 0:
             X_model_points.set_visible(True)
-            X_model_points.set_offsets(X_model[I_model_visible,:])
-            X_model_points.set_sizes(dist_scale/dist[I_model_visible,j_slider.val])
-            X_model_points.set_alpha(np.full(I_model_visible.size, 0.5) + 0.5 * np.isin(I_model_visible, I_both_visible))
+            X_model_points.set_offsets(X_model[I_model_boundary_visible,:])
+            X_model_points.set_sizes(dist_scale/dist[I_model_boundary_visible,j_slider.val])
+            X_model_points.set_alpha(np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_both_visible))
         else:
             X_model_points.set_visible(False)
 
         if X_pix is not None:
             X_pix_center = X_pix[:,j_slider.val,:] + 0.5
-            X_pix_points.set_offsets(X_pix_center)
-            X_pix_squares.set_verts(X_pix[:,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
+            X_pix_points.set_offsets(X_pix_center[I_pix_visible,:])
+            X_pix_squares.set_verts(X_pix[I_pix_visible,j_slider.val,:][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
             if I_both_visible.size > 0:
                 X_lines.set_visible(True)
                 X_lines.set_segments(np.stack((X_model[I_both_visible,:], X_pix_center[I_both_visible,:]), axis=1))
@@ -1114,6 +1112,15 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
 
     j_slider.on_changed(update)
 
+    def j_key(event):
+        if event.key in ('d', 'в') and j_slider.val < j_slider.valmax:
+            j_slider.set_val(j_slider.val + j_slider.valstep)
+        elif event.key in ('a', 'ф') and j_slider.val > j_slider.valmin:
+            j_slider.set_val(j_slider.val - j_slider.valstep)
+    
+    fig.canvas.mpl_connect('key_press_event', j_key)
+    
+
     if ret_axis: return ax0, ax1
 
 
@@ -1122,13 +1129,9 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
                  axis_off=False, grid_off=False, ret_axis=False):
     if X_array.ndim != 3:
         raise ValueError(f'Expected X_array to have ndim = 3, got {X_array.ndim}')
-    # if X_array.shape[2] != 3:
-    #     raise ValueError(f'Expected X_array to have shape[2] = 3, got {X_array.shape[1]}')
     P = X_array.shape[0]
     if C_array.ndim != 3:
         raise ValueError(f'Expected C_array to have ndim = 3, got {C_array.ndim}')
-    # if C_array.shape[2] != 3:
-    #     raise ValueError(f'Expected C_array to have shape[2] = 3, got {C_array.shape[1]}')
     if C_array.shape[0] != P:
         raise ValueError(f'Expected C_array.shape[0] = X_array.shape[0], got {C_array.shape[0]} != {X_array.shape[0]}')
     if Theta_array.shape != C_array.shape:
@@ -1171,7 +1174,7 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
                                [- tan_phi_x_2,   tan_phi_y_2, 1.0],
                                [- tan_phi_x_2, - tan_phi_y_2, 1.0],
                                [  tan_phi_x_2, - tan_phi_y_2, 1.0]])
-    camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
+    camera_corners_rot = camera_corners[np.newaxis,:,:] @ R.transpose(0, 2, 1)      # np.einsum('jkl,nl->jnk', R, camera_corners)
     # Поворот всей системы вокруг оси x на угол -pi/2
     Ryz = np.array([[1.0,  0.0, 0.0],
                     [0.0,  0.0, 1.0],
@@ -1226,7 +1229,8 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
         assert isinstance(ax, Axes)
         if image_paths is not None:
             ax.imshow(imread(image_paths[j]), extent=(0, W, H, 0), alpha=0.5)
-        X_pix_points[j] = ax.scatter(*X_pix_center[:,j,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
+        # X_pix_points[j] = ax.scatter(*X_pix_center[:,j,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
+        X_pix_points[j] = ax.scatter(*X_pix_center[I_pix_visible,j,:].T, s=dist_scale, marker='o', edgecolors='red', facecolors='none', zorder=10)
         X_model_points[j] = ax.scatter(*X_model[I_model_visible,j,:].T, s=dist_scale/dist[I_model_visible,j], marker='o', color='red', zorder=10)
         X_lines[j] = LineCollection(np.stack((X_model[I_both_visible,j,:], X_pix_center[I_both_visible,j,:]), axis=1),
                                     color='red', linewidth=1.0, alpha=0.5)
@@ -1241,7 +1245,7 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
                                    [- tan_phi_x_2,   tan_phi_y_2, 1.0],
                                    [- tan_phi_x_2, - tan_phi_y_2, 1.0],
                                    [  tan_phi_x_2, - tan_phi_y_2, 1.0]])
-        camera_corners_rot = np.einsum('jkl,nl->jnk', R, camera_corners)
+        camera_corners_rot = camera_corners[np.newaxis,:,:] @ R.transpose(0, 2, 1)      # np.einsum('jkl,nl->jnk', R, camera_corners)
         # Поворот всей системы вокруг оси x на угол -pi/2
         X_show = rotate_array(X_array[t_slider.val], Ryz, _validate=False)
         C_show = rotate_array(C_array[t_slider.val], Ryz, _validate=False)
@@ -1626,7 +1630,8 @@ def find_phi_x(X_pix, W, H, i_size_matrix, H_diff_matrix, H_diff_opt, attempts=5
 
 
 def get_pair_subscenes(X_pix, phi_x, W, H, H_diff_bool, max_size=50, normalize=False):
-    K = X_pix.shape[1]
+    N, K = validate_scene_arrays_shapes(X_pix=X_pix)
+    # K = X_pix.shape[1]
     X_visible = X_pix[:,:,0] >= 0
 
     j_subset_list = []
