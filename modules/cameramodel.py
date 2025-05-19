@@ -1,8 +1,11 @@
 NAME = "cameramodel"
 
+from typing import Any, Callable, Literal, Optional, Union
 import numpy as np
+from numpy.typing import NDArray
 from scipy.sparse.linalg import eigsh
 from scipy.optimize import linprog
+from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
 import matplotlib.patches as patches
@@ -10,12 +13,19 @@ from matplotlib.collections import LineCollection, PolyCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from matplotlib.widgets import Slider
 from matplotlib.image import imread
-import functools
-import time
+from warnings import warn
+from functools import wraps
 from tqdm import tqdm
 
 
-def validate_scene_arrays_shapes(X=None, C=None, Theta=None, R=None, X_pix=None, ret_shapes=False):
+def validate_scene_arrays_shapes(
+        X: Optional[NDArray[np.floating]] = None,
+        C: Optional[NDArray[np.floating]] = None,
+        Theta: Optional[NDArray[np.floating]] = None,
+        R: Optional[NDArray[np.floating]] = None,
+        X_pix: Optional[NDArray[np.integer]]  = None,
+        ret_shapes = False
+    ) -> Optional[list[Optional[int], Optional[int]]]:
     N, K = None, None
     
     if X is not None:
@@ -67,7 +77,7 @@ def validate_scene_arrays_shapes(X=None, C=None, Theta=None, R=None, X_pix=None,
     if ret_shapes: return N, K
 
 
-def error(X_pix, X_model):
+def error(X_pix: NDArray[np.integer], X_model: NDArray[np.floating]) -> np.floating:
     validate_scene_arrays_shapes(X_pix=X_pix)
     if X_model.shape != X_pix.shape:
         raise ValueError(f'Expected X_pix and X_model to have the same shape, got {X_pix.shape} != {X_model.shape}')
@@ -75,14 +85,14 @@ def error(X_pix, X_model):
     X_pix_visible = X_pix[:,:,0] >= 0
     X_model_visible = ~np.isnan(X_model)[:,:,0]
     X_both_visible = X_pix_visible * X_model_visible
-    X_pix_center_flat = X_pix[~X_both_visible].ravel() + 0.5
-    X_model_flat = X_model[~X_both_visible].ravel()
+    X_pix_center_flat = X_pix[X_both_visible].ravel() + 0.5
+    X_model_flat = X_model[X_both_visible].ravel()
     X_diff = X_model_flat - X_pix_center_flat
 
     return np.dot(X_diff, X_diff) / (2 * X_both_visible.sum())
 
 
-def rx(theta):
+def rx(theta: NDArray[np.floating]) -> NDArray[np.floating]:
     R = np.zeros((theta.size, 3, 3))
     R[:,0,0] = 1.0
     R[:,1,1] = R[:,2,2] = np.cos(theta)
@@ -90,7 +100,7 @@ def rx(theta):
     R[:,1,2] = - R[:,2,1]
     return R
 
-def ry(theta):
+def ry(theta: NDArray[np.floating]) -> NDArray[np.floating]:
     R = np.zeros((theta.size, 3, 3))
     R[:,1,1] = 1.0
     R[:,0,0] = R[:,2,2] = np.cos(theta)
@@ -98,7 +108,7 @@ def ry(theta):
     R[:,2,0] = - R[:,0,2]
     return R
 
-def rz(theta):
+def rz(theta: NDArray[np.floating]) -> NDArray[np.floating]:
     R = np.zeros((theta.size, 3, 3))
     R[:,2,2] = 1.0
     R[:,0,0] = R[:,1,1] = np.cos(theta)
@@ -106,25 +116,28 @@ def rz(theta):
     R[:,0,1] = - R[:,1,0]
     return R
 
-def ryxz(Theta, _validate=True):
+def ryxz(
+        Theta: NDArray[np.floating],
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(Theta=Theta)
     return ry(Theta[:,1]) @ rx(Theta[:,0]) @ rz(Theta[:,2])
 
-# def d_rx(theta):
+# def d_rx(theta: NDArray[np.floating]) -> NDArray[np.floating]:
 #     R = np.zeros((theta.size, 3, 3))
 #     R[:,1,1] = R[:,2,2] = - np.sin(theta)
 #     R[:,2,1] = np.cos(theta)
 #     R[:,1,2] = - R[:,2,1]
 #     return R
 
-# def d_ry(theta):
+# def d_ry(theta: NDArray[np.floating]) -> NDArray[np.floating]:
 #     R = np.zeros((theta.size, 3, 3))
 #     R[:,0,0] = R[:,2,2] = - np.sin(theta)
 #     R[:,0,2] = np.cos(theta)
 #     R[:,2,0] = - R[:,0,2]
 #     return R
 
-# def d_rz(theta):
+# def d_rz(theta: NDArray[np.floating]) -> NDArray[np.floating]:
 #     R = np.zeros((theta.size, 3, 3))
 #     R[:,0,0] = R[:,1,1] = - np.sin(theta)
 #     R[:,1,0] = np.cos(theta)
@@ -132,17 +145,26 @@ def ryxz(Theta, _validate=True):
 #     return R
 
 
-def project(X, C, Theta, f=1.0, dir_only=False, _validate=True):
+def project(
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        f: float = 1.0,
+        dir_only: bool = False,
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(X=X, C=C, Theta=Theta)
 
     R = ryxz(Theta, _validate=False)
     X_rot = ((X[:,np.newaxis,:] - C[np.newaxis,:,:]).transpose(1, 0, 2) @ R).transpose(1, 0, 2)     # np.einsum('jlk,ijl->ijk', R, X[:,np.newaxis,:] - C[np.newaxis,:,:])
     X_proj = np.full_like(X_rot, f)
-    X_proj[:,:,:2] = f * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
+    # X_proj[:,:,:2] = f * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
+    X_proj[:,:,:2] *= X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
     X_proj = (X_proj.transpose(1, 0, 2) @ R.transpose(0, 2, 1)).transpose(1, 0, 2)      # np.einsum('jkl,ijl->ijk', R, X_proj)
     
-    if dir_only: return X_proj
-    else: return X_proj + C[np.newaxis,:,:]
+    if not dir_only: X_proj += C[np.newaxis,:,:]
+    
+    return X_proj
 
 
 def enforce_int_img_arg(position):
@@ -150,7 +172,7 @@ def enforce_int_img_arg(position):
     Check if function argument in the position is H instead of r.
     """
     def decorator(func):
-        @functools.wraps(func)
+        @wraps(func)
         def wrapper(*args, **kwargs):
             value = args[position]
             if not isinstance(value, int):
@@ -161,30 +183,54 @@ def enforce_int_img_arg(position):
 
 
 @enforce_int_img_arg(5)
-def reverse_project(X_pix, C, Theta, phi_x, W, H, f=1.0, dir_only=False, _validate=True):
-    if _validate: validate_scene_arrays_shapes(X_pix=X_pix, C=C, Theta=Theta)
+def reverse_project(
+        X_pix: NDArray[np.integer],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        f: float = 1.0,
+        dir_only: bool = False,
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
+    if _validate: N, K = validate_scene_arrays_shapes(X_pix=X_pix, C=C, Theta=Theta, ret_shapes=True)
 
     WH = np.array([W, H])
-    X_pix_center = X_pix + 0.5
-    X_pix_center[X_pix[:,:,0] < 0] = np.nan
+    X_pix_center = np.full((N, K, 2), np.nan)
+    X_pix_center[X_pix[:,:,0] >= 0] = X_pix + 0.5
     X_proj = np.full((*X_pix.shape[:2], 3), f)
-    X_proj[:,:,:2] = f * np.tan(phi_x / 2.0) / W * (2.0 * X_pix_center[:,:,:2] - WH)
+    # X_proj[:,:,:2] = f * np.tan(phi_x / 2.0) / W * (2.0 * X_pix_center[:,:,:2] - WH)
+    X_proj[:,:,:2] *= np.tan(phi_x / 2.0) / W * (2.0 * X_pix_center[:,:,:2] - WH)
     R = ryxz(Theta, _validate=False)
     X_proj = (X_proj.transpose(1, 0, 2) @ R.transpose(0, 2, 1)).transpose(1, 0, 2)        # np.einsum('jkl,ijl->ijk', ryxz(Theta), X_proj)
     
-    if dir_only: return X_proj
-    else: return X_proj + C[np.newaxis,:,:]
+    if not dir_only: X_proj += C[np.newaxis,:,:]
+    
+    return X_proj
 
 
 @enforce_int_img_arg(5)
-def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary_points=False, _validate=True):
+def transform(
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        delete_back_points: bool = True,
+        delete_boundary_points: bool = False,
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(X=X, C=C, Theta=Theta)
 
     WH = np.array([W, H])
     R = ryxz(Theta, _validate=False)
     X_rot = ((X[:,np.newaxis,:] - C[np.newaxis,:,:]).transpose(1, 0, 2) @ R).transpose(1, 0, 2)       # np.einsum('jlk,ijl->ijk', ryxz(Theta), X[:,np.newaxis,:] - C[np.newaxis,:,:])
-    if delete_back_points: X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
+    if delete_back_points:
+        X_rot[np.where(X_rot[:,:,2] <= 0)] = np.nan
     X_model = (W / np.tan(phi_x / 2.0) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis] + WH) / 2.0
+
     if delete_boundary_points:
         I, J = np.where((X_model[:,:,0] < 0) | (X_model[:,:,0] >= W) | (X_model[:,:,1] < 0) | (X_model[:,:,1] >= H))
         X_model[I, J] = np.nan
@@ -192,13 +238,22 @@ def transform(X, C, Theta, phi_x, W, H, delete_back_points=True, delete_boundary
     return X_model
 
 
-def distance(X, C, Theta, _validate=True):
+def distance(
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(X=X, C=C, Theta=Theta)
     R = ryxz(Theta, _validate=False)
     return np.einsum('jl,ijl->ij', R[:,:,2], X[:,np.newaxis,:] - C[np.newaxis,:,:])
 
 
-def orthogonolize_R(Q, check_det=True, _validate=True):
+def orthogonolize_matrix(
+        Q: NDArray[np.floating],
+        check_det: bool = True,
+        _validate: bool = True
+    ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     if _validate:
         if Q.ndim != 3:
             raise ValueError(f'Expected Q to have ndim = 3, got {Q.ndim}')
@@ -210,18 +265,22 @@ def orthogonolize_R(Q, check_det=True, _validate=True):
 
     if check_det:
         det_R = np.linalg.det(R)
-        j_bad = np.where(det_R < 0.0)[0]
-        if j_bad.size > 0:
-            print(f'Bad: {j_bad}')
-            R[j_bad] *= -1.0
+        J_neg_det = np.where(det_R < 0.0)[0]
+        if J_neg_det.size > 0:
+            print(f'Matrices with negative det: {J_neg_det}')
+            R[J_neg_det] *= -1.0
     
     return R, Sigma
 
 
-def get_Theta(R, orthogonolize=False, _validate=True):
+def get_Theta(
+        R: NDArray[np.floating],
+        orthogonolize: bool = False,
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(R=R)
     if orthogonolize:
-        R, _ = orthogonolize_R(R, _validate=False)
+        R, _ = orthogonolize_matrix(R, _validate=False)
     else:
         if (np.abs(R.transpose(0, 2, 1) @ R - np.eye(3)) > 1e-9).any():     # np.einsum('jkl,jkn->jln', R, R)
             raise ValueError('Expected R[i] to be normal for all i (R[i] @ R[i].T must be approximately equal to eye(3)).')
@@ -238,7 +297,15 @@ def get_Theta(R, orthogonolize=False, _validate=True):
     return Theta
 
 
-def align_scene(X, C, Theta=None, R=None, ret_R=False, _validate=True):
+def align_scene(
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        Theta: Optional[NDArray[np.floating]] = None,
+        R: Optional[NDArray[np.floating]] = None,
+        ret_R: bool = False,
+        _validate: bool = True
+    ) -> Union[tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]],
+               tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]]:
     if Theta is None and R is None:
         raise ValueError('Expected Theta or R to be passed')
     elif Theta is not None and R is not None:
@@ -266,7 +333,15 @@ def align_scene(X, C, Theta=None, R=None, ret_R=False, _validate=True):
     else: return X_new, C_new, Theta_new, R_new
 
 
-def normalize_scene(X, C, main_indexes=None, r_scale=1.0, ret_j=False, _validate=True):
+def normalize_scene(
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        main_indexes: Optional[Union[tuple, list, NDArray[np.integer]]] = None,
+        dist_scale: float = 1.0,
+        ret_j: bool = False,
+        _validate: bool = True
+    ) -> Union[tuple[NDArray[np.floating], NDArray[np.floating]],
+               tuple[NDArray[np.floating], NDArray[np.floating], Union[int, np.integer]]]:
     if _validate:
         validate_scene_arrays_shapes(X=X, C=C)
         if main_indexes is not None and len(main_indexes) != 2:
@@ -278,19 +353,34 @@ def normalize_scene(X, C, main_indexes=None, r_scale=1.0, ret_j=False, _validate
     else: j0, j1 = main_indexes
 
     scale = np.linalg.norm(C[j1] - C[j0])
-    factor = r_scale / scale
+    factor = dist_scale / scale
     X_new = X * factor
     C_new = C * factor
 
-    if not ret_j: return X_new, C_new
-    else: return X_new, C_new, j1
+    returns = [X_new, C_new]
+    if ret_j: returns.append(j1)
+
+    return returns
 
 
-def sgd(x, grad_x, lr):
+def sgd(
+        x: NDArray[np.floating],
+        grad_x: NDArray[np.floating],
+        lr: float
+    ) -> tuple[NDArray[np.floating], dict]:
     x_new = x - lr * grad_x
     return x_new, {}
 
-def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
+def gd_adam(
+        x: NDArray[np.floating],
+        grad_x: NDArray[np.floating],
+        lr: float,
+        s: NDArray[np.floating],
+        r: NDArray[np.floating],
+        t: NDArray[np.integer],
+        rho_1: float = 0.9,
+        rho_2: float = 0.999
+    ) -> tuple[NDArray[np.floating], dict[str, Union[NDArray[np.floating], NDArray[np.integer]]]]:
     s_new = rho_1 * s + (1.0 - rho_1) * grad_x
     r_new = rho_2 * r + (1.0 - rho_2) * grad_x**2
     s_corr = s_new / (1.0 - rho_1**t)
@@ -300,9 +390,25 @@ def gd_adam(x, grad_x, lr, s, r, t, rho_1=0.9, rho_2=0.999):
     return x_new, {'s': s_new, 'r': r_new, 't': t_new}
 
 
-def lr_manager(lr, iters, E, E_min, E_min_temp,
-               patience_timer, success_timer, began_decreasing, increased,
-               patience, factor, params, ret_arrays, func, func_args, func_kwargs):
+def lr_manager(
+        lr: float,
+        iters: int,
+        E: NDArray[np.floating],
+        E_min: Union[np.floating, float],
+        E_min_temp: Union[np.floating, float],
+        patience_timer: int,
+        success_timer: int,
+        began_decreasing: bool,
+        increased: bool,
+        patience: int,
+        factor: float,
+        params: dict[str, dict[str, Any]],
+        ret_arrays: bool,
+        func: Callable[..., tuple[tuple, dict]],
+        func_args: tuple,
+        func_kwargs: dict
+    ) -> tuple[tuple[float, int, np.floating, np.floating, int, int, bool, bool],
+               list[tuple[tuple, dict]]]:
     returns_list = []
 
     lr_, iters_, E_min_, E_min_temp_ = lr, iters, E_min, E_min_temp
@@ -316,7 +422,8 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
             if not began_decreasing_:
                 began_decreasing_ = True
 
-            for key, val in params.items():
+            # for key, val in params.items():
+            for val in params.values():
                 val['release'] = val['main'].copy()
 
             if patience_timer_ != patience:
@@ -330,7 +437,8 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                 increased_ = True
                 E_min_temp_ = E_min_
 
-                for key1, val1 in params.items():
+                # for key1, val1 in params.items():
+                for val1 in params.values():
                     for key2 in val1['gd']:
                         val1['gd_temp'][key2] = val1['gd'][key2].copy()
                         val1['gd'][key2] = val1['gd_init'][key2].copy()
@@ -352,24 +460,28 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
                 print(f'{iters_} : Decrease LR to {lr_ / factor}')
                 lr_ /= factor
 
-                for key, val in params.items():
+                # for key, val in params.items():
+                for val in params.values():
                     val['main'][:] = val['release']
 
                 results = func(*func_args, **func_kwargs)
                 returns_list.append(results)
 
                 if not increased_ or (increased_ and E_min_temp_ > E_min_):
-                    for key1, val1 in params.items():
+                    # for key1, val1 in params.items():
+                    for val1 in params.values():
                         for key2 in val1['gd']:
                             val1['gd'][key2] = val1['gd_init'][key2].copy()
                 else:
-                    for key1, val1 in params.items():
+                    # for key1, val1 in params.items():
+                    for val1 in params.values():
                         for key2 in val1['gd']:
                             val1['gd'][key2] = val1['gd_temp'][key2].copy()
                     increased_ = False
 
     if ret_arrays:
-        for key, val in params.items():
+        # for key, val in params.items():
+        for val in params.values():
             val['list'][iters] = val['main'].copy()
 
     returns_tuple = (lr_, iters_, E_min_, E_min_temp_, patience_timer_, success_timer_, began_decreasing_, increased_)
@@ -377,16 +489,34 @@ def lr_manager(lr, iters, E, E_min, E_min_temp,
 
 
 @enforce_int_img_arg(2)
-def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
-        X_mask=True, C_Theta_mask=True, phi_x_mask=True, optimizer='Adam', patience=1000,
-        factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
+def fit(
+        X_pix: NDArray[np.integer],
+        W: int,
+        H: int,
+        lr: float,
+        max_iters: int,
+        X_0: NDArray[np.floating],
+        C_0: NDArray[np.floating],
+        Theta_0: NDArray[np.floating],
+        phi_x_0: Union[np.floating, float],
+        X_mask: bool = True,
+        C_Theta_mask: bool = True,
+        phi_x_mask: bool = True,
+        optimizer: Literal['SGD', 'Adam'] = 'Adam',
+        patience: int = 1000,
+        factor: float = 2.0,
+        stop_value: float = 0.0,
+        stop_diff: float = 1e-12,
+        print_step: int = 1000,
+        ret_arrays: bool = False
+    ) -> list[Union[NDArray[np.floating], np.floating]]:
     N, K = validate_scene_arrays_shapes(X=X_0, C=C_0, Theta=Theta_0, X_pix=X_pix, ret_shapes=True)
 
     WH_2 = np.array([W, H]) / 2.0
     X_visible = X_pix[:,:,0] >= 0
-    NK_nan = X_visible.sum()
-    X_pix_center = X_pix + 0.5
-    X_pix_center[~X_visible] = np.nan
+    NK_notnan = X_visible.sum()
+    X_pix_center = np.full((N, K, 2), np.nan)
+    X_pix_center[X_visible] = X_pix + 0.5
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), np.array([phi_x_0])
 
     if C_Theta_mask:
@@ -396,9 +526,17 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     D['X_model', 'X_rot'] = np.zeros((N, K, 2, 3))
     if C_Theta_mask: D['R', 'Theta'] = np.zeros((K, 3, 3, 3))
 
-    def inner_transform(X, C, Theta, phi_x, calc_Rs, R=None, f=None):
+    def inner_transform(
+            X: NDArray[np.floating],
+            C: NDArray[np.floating],
+            Theta: NDArray[np.floating],
+            phi_x: NDArray[np.floating],
+            calc_Rs: bool,
+            R: Optional[NDArray[np.floating]] = None,
+            f: Optional[NDArray[np.floating]] = None
+        ) -> tuple[tuple[NDArray[np.floating]], dict[str, NDArray[np.floating]]]:
         returns_dict = dict()
-        
+
         X_tr = X[:,np.newaxis,:] - C[np.newaxis,:,:]
         if calc_Rs:
             Rx, Ry, Rz = rx(Theta[:,0]), ry(Theta[:,1]), rz(Theta[:,2])
@@ -433,16 +571,19 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     if C_Theta_mask: params['C']['main'], params['Theta']['main'] = C, Theta
     if phi_x_mask: params['phi_x']['main'] = phi_x
 
-    for key, val in params.items():
+    # for key, val in params.items():
+    for val in params.values():
         val['release'] = val['main'].copy()
 
     gd_func_dict = {'SGD': sgd, 'Adam': gd_adam}
 
-    for key, val in params.items():
+    # for key, val in params.items():
+    for val in params.values():
         val['gd'], val['gd_temp'], val['gd_init'] = dict(), dict(), dict()
 
     if optimizer == 'Adam':
-        for key, val in params.items():
+        # for key, val in params.items():
+        for val in params.values():
             val['gd']['s'], val['gd_temp']['s'], val['gd_init']['s'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
             val['gd']['r'], val['gd_temp']['r'], val['gd_init']['r'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
             val['gd']['t'], val['gd_temp']['t'], val['gd_init']['t'] = np.array([1]), np.array([1]), np.array([1])
@@ -455,7 +596,8 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
     increased = False
 
     if ret_arrays:
-        for key, val in params.items():
+        # for key, val in params.items():
+        for val in params.values():
             val['list'] = max_iters * [None]
 
     iters = 0
@@ -472,7 +614,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         if calculate_R: R = transorm_res_dict['R']
         if phi_x_mask: f = transorm_res_dict['f']
 
-        E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_nan)     # должно считаться в >2 раза быстрее, чем np.sum(X_diff**2) / (2 * NK_nan)
+        E[iters] = np.dot(X_diff.ravel(), X_diff.ravel()) / (2 * NK_notnan)
 
         transform_kwargs = dict()
         if not C_Theta_mask: transform_kwargs['R'] = R
@@ -495,11 +637,11 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
             if E_min_diff > 0.0 and E_min_diff < stop_diff:
                 print(f'{iters} : Reached stopping difference: {E_min_diff} < {stop_diff}')
                 break
-        
+
         if E[iters] < stop_value:
             print(f'{iters} : Reached stopping value: {E[iters]} < {stop_value}')
             break
-        
+
         if iters == max_iters - 1:
             print(f'{iters} : Reached maximum iterations')
             break
@@ -519,7 +661,7 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         D['X_model', 'X'] = D['X_model', 'X_rot'] @ R.transpose(0, 2, 1)[np.newaxis,:,:,:]      # np.einsum('ijkn,jln->ijkl', D['X_model', 'X_rot'], R)
 
-        D['E', 'X_model'] = X_diff / NK_nan
+        D['E', 'X_model'] = X_diff / NK_notnan
 
         if X_mask:
             D['E', 'X'] = (D['E', 'X_model'].reshape(N, -1)[:,np.newaxis,:] @ D['X_model', 'X'].reshape(N, -1, 3))[:,0,:]       # np.einsum('ijl,ijlk->ik', D['E', 'X_model'], D['X_model', 'X'])
@@ -562,14 +704,14 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
 
         if phi_x_mask:
             D['X_model', 'phi_x'] = - f / np.sin(phi_x) * X_rot[:,:,:2] / X_rot[:,:,2][:,:,np.newaxis]
-            D['E', 'phi_x'] = np.array([np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())])      # должно считаться в >2 раза быстрее, чем np.sum(D['E', 'X_model'] * D['X_model', 'alpha_x'])
-        
+            D['E', 'phi_x'] = np.array([np.dot(D['E', 'X_model'].ravel(), D['X_model', 'phi_x'].ravel())])
+
         for key, val in params.items():
             gd_result, gd_results_dict = gd_func_dict[optimizer](val['main'], D['E', key], lr, **val['gd'])
             val['main'][:] = gd_result
             for key1, val1 in val['gd'].items():
                 val1[:] = gd_results_dict[key1]
-        
+
         if X_mask and C_Theta_mask:
             X[:], C[:], Theta[:], R = align_scene(X, C, Theta=Theta, ret_R=True, _validate=False)
             X[:], C[:] = normalize_scene(X, C, _validate=False)
@@ -583,14 +725,27 @@ def fit(X_pix, W, H, lr, max_iters, X_0, C_0, Theta_0, phi_x_0,
         if ret_arrays:
             params['phi_x']['list'] = [phi_x[0] for phi_x in params['phi_x']['list']]
 
-    returns = [*[val['main'] for key, val in params.items()], E[:iters+1]]
+    returns = [*[val['main'] for val in params.values()], E[:iters+1]]
     if ret_arrays:
-        returns.extend([np.array(val['list']) for key, val in params.items()])
+        returns.extend([np.array(val['list']) for val in params.values()])
     return returns
 
 
-def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam', patience=1000,
-               factor=2.0, stop_value=0.0, stop_diff=1e-12, print_step=1000, ret_arrays=False):
+def fit_X_sets(
+        X: NDArray[np.floating],
+        lr: float,
+        max_iters: int,
+        S_0: Optional[NDArray[np.floating]] = None,
+        T_0: Optional[NDArray[np.floating]] = None,
+        Psi_0: Optional[NDArray[np.floating]] = None,
+        optimizer: Literal['SGD', 'Adam'] = 'Adam',
+        patience: int = 1000,
+        factor: float = 2.0,
+        stop_value: float = 0.0,
+        stop_diff: float = 1e-12,
+        print_step: int = 1000,
+        ret_arrays: bool = False
+    ) -> list[NDArray[np.floating]]:
     if X.ndim != 3:
         raise ValueError(f'Expected X to have ndim = 3, got {X.ndim}')
     if X.shape[2] != 3:
@@ -602,8 +757,8 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         raise ValueError(f'Expected X to have shape[1] >= 2, got 1')
 
     X_visible = ~np.isnan(X)[:,:,0]
-    NP_nan = X_visible.sum()
-    
+    NP_notnan = X_visible.sum()
+
     if S_0 is None: S = np.ones(P)
     else: S = S_0.copy()
     if T_0 is None: T = np.zeros((P, 3))
@@ -616,7 +771,15 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
     D = dict()
     D['R', 'Psi'] = np.zeros((P, 3, 3, 3))
 
-    def inner_transform(X, S, T, Psi, calc_Rs, ret_X_new=False, R=None):
+    def inner_transform(
+            X: NDArray[np.floating],
+            S: NDArray[np.floating],
+            T: NDArray[np.floating],
+            Psi: NDArray[np.floating],
+            calc_Rs: bool,
+            ret_X_new: bool = False,
+            R: Optional[NDArray[np.floating]] = None
+        ) -> tuple[tuple[NDArray[np.floating]], dict[str, NDArray[np.floating]]]:
         returns_dict = dict()
 
         if calc_Rs:
@@ -627,7 +790,7 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
             returns_dict['R'] = R_
         else:
             R_ = R
-        
+
         X_rot = (X.transpose(1, 0, 2) @ R_.transpose(0, 2, 1)).transpose(1, 0, 2)       # np.einsum('jkl,ijl->ijk', R_, X)
         X_new = S[np.newaxis,:,np.newaxis] * X_rot + T
         if ret_X_new:
@@ -636,7 +799,7 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         X_diff = X_new - X_mean
 
         return (X_diff, X_rot), returns_dict
-    
+
     params_names = ['S', 'T', 'Psi']
 
     params = {name: dict() for name in params_names}
@@ -644,16 +807,19 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
     params['T']['main'] = T
     params['Psi']['main'] = Psi
 
-    for key, val in params.items():
+    # for key, val in params.items():
+    for val in params.values():
         val['release'] = val['main'].copy()
 
     gd_func_dict = {'SGD': sgd, 'Adam': gd_adam}
 
-    for key, val in params.items():
+    # for key, val in params.items():
+    for val in params.values():
         val['gd'], val['gd_temp'], val['gd_init'] = dict(), dict(), dict()
 
     if optimizer == 'Adam':
-        for key, val in params.items():
+        # for key, val in params.items():
+        for val in params.values():
             val['gd']['s'], val['gd_temp']['s'], val['gd_init']['s'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
             val['gd']['r'], val['gd_temp']['r'], val['gd_init']['r'] = np.zeros_like(val['main']), np.zeros_like(val['main']), np.zeros_like(val['main'])
             val['gd']['t'], val['gd_temp']['t'], val['gd_init']['t'] = np.array([1]), np.array([1]), np.array([1])
@@ -666,7 +832,8 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
     increased = False
 
     if ret_arrays:
-        for key, val in params.items():
+        # for key, val in params.items():
+        for val in params.values():
             val['list'] = max_iters * [None]
 
     iters = 0
@@ -679,7 +846,8 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
         if calculate_Rs: Rx, Ry, Rz = transorm_res_dict['Rx'], transorm_res_dict['Ry'], transorm_res_dict['Rz']
         if calculate_R: R = transorm_res_dict['R']
 
-        E[iters] = np.dot(np.nan_to_num(X_diff).ravel(), np.nan_to_num(X_diff).ravel()) / (2.0 * NP_nan)
+        X_diff_ravel = np.nan_to_num(X_diff).ravel()
+        E[iters] = np.dot(X_diff_ravel, X_diff_ravel) / (2.0 * NP_notnan)
 
         manager_res_tuple, manager_res_list = lr_manager(lr, iters, E, E_min, E_min_temp,
                                                          patience_timer, success_timer, began_decreasing, increased,
@@ -713,14 +881,14 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
             transorm_res_tuple, transorm_res_dict = manager_res_list[0]
             X_diff, X_rot = transorm_res_tuple
             Rx, Ry, Rz, R = transorm_res_dict['Rx'], transorm_res_dict['Ry'], transorm_res_dict['Rz'], transorm_res_dict['R']
-        
+
         if iters % print_step == 0: print(f'{iters} : {E_min}')
 
         X_diff_centered = np.nan_to_num(X_diff - np.nanmean(X_diff, axis=1, keepdims=True))
 
-        D['E', 'S'] = 2.0 / NP_nan * np.einsum('ijk,ijk->j', X_diff_centered, np.nan_to_num(X_rot))
-        
-        D['E', 'T'] = 2.0 / NP_nan * np.sum(X_diff_centered, axis=0)
+        D['E', 'S'] = 2.0 / NP_notnan * np.einsum('ijk,ijk->j', X_diff_centered, np.nan_to_num(X_rot))
+
+        D['E', 'T'] = 2.0 / NP_notnan * np.sum(X_diff_centered, axis=0)
 
         if not calculate_Rs and not manager_res_list:
             Rx[:,1,1] = Rx[:,2,2] = np.sign(np.pi - (Psi[:,0] + np.pi/2.0) % (2.0*np.pi)) * np.sqrt(R[:,1,0]**2 + R[:,1,1]**2)
@@ -753,8 +921,8 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
 
         D['X_rot', 'Psi'] = (np.nan_to_num(X).transpose(1, 0, 2) \
                              @ D['R', 'Psi'].transpose(0, 2, 1, 3).reshape(P, 3, 9)).reshape(P, N, 3, 3).transpose(1, 0, 2, 3)      # np.einsum('jknl,ijn->ijkl', D['R', 'Psi'], np.nan_to_num(X))
-        D['E', 'Psi'] = 2.0 / NP_nan * ((X_diff_centered.transpose(1, 0, 2).reshape(P, 3 * N) * S[:,np.newaxis])[:,np.newaxis,:] \
-                                        @ D['X_rot', 'Psi'].transpose(1, 0, 2, 3).reshape(P, 3 * N, 3))[:,0,:]        # np.einsum('ijn,j,ijnk->jk', X_diff_centered, S, D['X_rot', 'Psi'])
+        D['E', 'Psi'] = 2.0 / NP_notnan * ((X_diff_centered.transpose(1, 0, 2).reshape(P, 3 * N) * S[:,np.newaxis])[:,np.newaxis,:] \
+                                           @ D['X_rot', 'Psi'].transpose(1, 0, 2, 3).reshape(P, 3 * N, 3))[:,0,:]        # np.einsum('ijn,j,ijnk->jk', X_diff_centered, S, D['X_rot', 'Psi'])
 
         for key, val in params.items():
             gd_result, gd_results_dict = gd_func_dict[optimizer](val['main'], D['E', key], lr, **val['gd'])
@@ -776,12 +944,15 @@ def fit_X_sets(X, lr, max_iters, S_0=None, T_0=None, Psi_0=None, optimizer='Adam
     transorm_res_list, transorm_res_dict = inner_transform(X, S, T, Psi, calc_Rs=True, ret_X_new=True)
     X_new = transorm_res_dict['X_new']
 
-    returns = [X_new, *[val['main'] for key, val in params.items()], E[:iters+1]]
-    if ret_arrays: returns.extend([np.array(val['list'][:iters+1]) for key, val in params.items()])
+    returns = [X_new, *[val['main'] for val in params.values()], E[:iters+1]]
+    if ret_arrays: returns.extend([np.array(val['list'][:iters+1]) for val in params.values()])
     return returns
 
 
-def adapt_X_sets(X, normalize=False):
+def adapt_X_sets(
+        X: NDArray[np.floating],
+        normalize: bool = False
+    ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
     if X.ndim != 3:
         raise ValueError(f'Expected X to have ndim = 3, got {X.ndim}')
     if X.shape[2] != 3:
@@ -792,34 +963,33 @@ def adapt_X_sets(X, normalize=False):
     if P == 1:
         raise ValueError(f'Expected X to have shape[1] >= 2, got 1')
 
-    start_time = time.time()
-
     X_visible = ~np.isnan(X)[:,:,0]
+    NP_notnan = X_visible.sum()
 
-    print(f'Calculating A:\t\t{time.time() - start_time}')
+    print(f'Calculating A:')
     W = np.eye(1 + 12 * (P - 1), dtype=np.bool_)
-    Y_array = np.full((1 + 12 * (P - 1), *X.shape), np.nan)
-    Y_array[0,:,0,:] = X[:,0,:]
-    Y_array[1:,X_visible[:,0],0,:] = 0.0
+    Y_4dim = np.full((1 + 12 * (P - 1), *X.shape), np.nan)
+    Y_4dim[0,:,0,:] = X[:,0,:]
+    Y_4dim[1:,X_visible[:,0],0,:] = 0.0
 
-    Q_array = W[:, 1:1+9*(P-1)].reshape(1 + 12 * (P - 1), P - 1, 3, 3)
-    Q_mask = np.nonzero(Q_array)
+    Q_4dim = W[:, 1:1+9*(P-1)].reshape(1 + 12 * (P - 1), P - 1, 3, 3)
+    Q_4dim_mask = np.nonzero(Q_4dim)
     Q_X = np.zeros((1 + 12 * (P - 1), N, P - 1, 3))
     Q_X[:,~X_visible[:,1:],:] = np.nan
-    for n, j, k, l in zip(*Q_mask):
+    for n, j, k, l in zip(*Q_4dim_mask):
         Q_X[n,:,j,k] += X[:,1:,:][:,j,l]
-    Y_array[:,:,1:,:] = Q_X
+    Y_4dim[:,:,1:,:] = Q_X
 
-    T_array = W[:, 1+9*(P-1):].reshape(1 + 12 * (P - 1), P - 1, 3)
-    T_mask = np.nonzero(T_array)
-    for n, j, k in zip(*T_mask):
-        Y_array[n,:,j+1,k] += T_array[n,j,k]
+    T_3dim = W[:, 1+9*(P-1):].reshape(1 + 12 * (P - 1), P - 1, 3)
+    T_3dim_mask = np.nonzero(T_3dim)
+    for n, j, k in zip(*T_3dim_mask):
+        Y_4dim[n,:,j+1,k] += T_3dim[n,j,k]
 
-    M_array = np.nanmean(Y_array, axis=2, keepdims=True)
-    A = (Y_array - M_array).T.reshape(3 * N * P, 1 + 12 * (P - 1))
+    M_4dim = np.nanmean(Y_4dim, axis=2, keepdims=True)
+    A = (Y_4dim - M_4dim).T.reshape(3 * N * P, 1 + 12 * (P - 1))
     A = A[~np.isnan(A[:,0])]
 
-    print(f'Calculating w:\t\t{time.time() - start_time}')   
+    print(f'Calculating w:')   
 
     A_mat, A_vec = A[:,1:], A[:,0]
     if not normalize:
@@ -836,14 +1006,12 @@ def adapt_X_sets(X, normalize=False):
 
     X_new = (X.transpose(1, 0, 2) @ Q.transpose(0, 2, 1)).transpose(1, 0, 2) + T        # np.einsum('jkl,ijl->ijk', Q, X)
     X_mean = np.nanmean(X_new, axis=1, keepdims=True)
-    X_diff = np.nan_to_num(X_new - X_mean).ravel()
-    NP_nan = X_visible.sum()
 
-    X_errors = np.nanmean(np.linalg.norm(X_new - np.nanmean(X_new, axis=1, keepdims=True), axis=2), axis=0)
-    print(X_errors)
+    X_errors = np.nanmean(np.linalg.norm(X_new - X_mean, axis=2), axis=0)
+    print(f'{X_errors = }')
 
-    print(f'Calculating S, T, Psi:\t{time.time() - start_time}')
-    R, Sigma = orthogonolize_R(Q)
+    print(f'Calculating S, T, Psi:')
+    R, Sigma = orthogonolize_matrix(Q)
     S = Sigma.mean(axis=1)
 
     Psi = get_Theta(R, _validate=False)
@@ -852,8 +1020,7 @@ def adapt_X_sets(X, normalize=False):
 
     X_mean = np.nanmean(X_new, axis=1, keepdims=True)
     X_diff = np.nan_to_num(X_new - X_mean).ravel()
-    NP_nan = X_visible.sum()
-    print(f'E = {np.dot(X_diff, X_diff) / (2.0 * NP_nan)}')
+    print(f'E = {np.dot(X_diff, X_diff) / (2.0 * NP_notnan)}')
 
     return X_new, S, T, Psi
 
@@ -885,7 +1052,11 @@ def safe_direction(X, id):
     return x_dir / np.linalg.norm(x_dir)
 
 
-def rotate_array(V, R, _validate=True):
+def rotate_array(
+        V: NDArray[np.floating],
+        R: NDArray[np.floating],
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate and R.shape != (3, 3):
         raise ValueError(f'Expected R to have shape (3, 3), got {R.shape}')
     return (V.reshape(-1, 3) @ R.T).reshape(*V.shape)
@@ -927,15 +1098,31 @@ def draw_2d_views(axes, X_pix, W, H, X_model=None, object_corner_list=None, pict
         else: ax.axis('off')
 
 
-def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_paths=None,
-                     dist_scale=10.0, f=0.2, frame_scale=1.0, trajectory_markers=False, show_image_lines=False,
-                     axis_off=False, grid_off=False, ret_axis=False):
+def draw_2d_3d_scene(
+        fig: Figure,
+        j_slider: Slider,
+        X: NDArray[np.floating],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        X_pix: Optional[NDArray[np.integer]] = None,
+        image_paths: Optional[Union[list[str], NDArray[np.str_]]] = None,
+        dist_scale: float = 10.0,
+        f: float = 0.2,
+        frame_scale: float = 1.0,
+        trajectory: bool = True,
+        trajectory_markers: bool = False,
+        show_image_lines: bool = False,
+        axis_off: bool = False,
+        grid_off: bool = False,
+        ret_axis: bool = False
+    ) -> Optional[tuple[Axes3D, Axes]]:
     N, K = validate_scene_arrays_shapes(X=X, C=C, Theta=Theta, X_pix=X_pix, ret_shapes=True)
     if image_paths is not None:
-        if image_paths.size != K:
+        if len(image_paths) != K:
             raise ValueError('Expected image_paths.size == K')
-
-    assert isinstance(j_slider, Slider)
 
     ax0 = fig.add_subplot(1, 2, 1, projection='3d')
     assert isinstance(ax0, Axes3D)
@@ -955,8 +1142,8 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     if grid_off: ax0.grid(False)
 
     R = ryxz(Theta[j_slider.val].reshape(1, -1), _validate=False)[0]
-    camera_dir = np.array([[0.0, 0.0, 1.0]])
-    camera_dir_rot = camera_dir @ R.T
+    camera_dir = np.array([0.0, 0.0, 1.0])
+    camera_dir_rot = R @ camera_dir
     tan_phi_x_2 = np.tan(phi_x / 2.0)
     tan_phi_y_2 = H / W * tan_phi_x_2
     camera_corners = np.array([[  tan_phi_x_2,   tan_phi_y_2, 1.0],
@@ -971,39 +1158,49 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     X_show = rotate_array(X, Ryz, _validate=False)
     C_show = rotate_array(C, Ryz, _validate=False)
     camera_dir_rot = rotate_array(camera_dir_rot, Ryz, _validate=False)
-    camera_dir_rot = camera_dir_rot.ravel()
     camera_corners_rot = rotate_array(camera_corners_rot, Ryz, _validate=False)
 
     X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
                         delete_back_points=True, delete_boundary_points=False, _validate=False)[:,0,:]
-    I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
     I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
     I_model_boundary = np.where((X_model[:,0] < 0) | (X_model[:,0] >= W) | (X_model[:,1] < 0) | (X_model[:,1] >= H))[0]
     I_model_boundary_visible = I_model_visible.copy()
     I_model_visible = np.sort(np.array(list(set(I_model_visible) - set(I_model_boundary)), dtype=np.int64))
-    I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
-    I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
+    if X_pix is not None:
+        I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
+        I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
+        I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
     # задавать alpha нормально не получается, возникают баги
     X_visible_points = ax0.scatter(*X_show[I_model_visible,:].T, marker='o', s=16, color='red', depthshade=False)
     I_model_not_visible = np.array(list(set(range(N)) - set(I_model_visible)), dtype=np.int64)
     X_not_visible_points = ax0.scatter(*X_show[I_model_not_visible,:].T,  marker='o', s=12, color='red', depthshade=False, alpha=0.5)
 
-    if not trajectory_markers:
-        ax0.plot(*C_show.T, color='blue')
-    else:
-        ax0.plot(*C_show.T, color='blue', marker='o', markersize=2)
+    C_points_marker = ' ' if not trajectory_markers else 'o'
+    C_points_linestyle = '-' if trajectory else 'none'
+    ax0.plot(*C_show.T, color='blue', linestyle=C_points_linestyle, marker=C_points_marker, markersize=2)
     C_current_point = ax0.scatter(*C_show[j_slider.val,:], marker='o', s=16, color='blue', depthshade=False)
 
     if show_image_lines:
         X_proj = project(X[I_model_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f, _validate=False)[:,0,:]
         X_proj_show = rotate_array(X_proj, Ryz, _validate=False)
 
-        X_proj_traces = Line3DCollection(np.stack((X_show[I_both_visible], X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]), axis=1),
-                                         linewidth=1.0, colors='red', alpha=0.5)
+        if X_pix is not None:
+            X_proj_traces = Line3DCollection(np.stack((X_show[I_both_visible],
+                                                       X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]),
+                                                      axis=1),
+                                             linewidth=1.0, colors='red', alpha=0.5)
+            X_proj_semitraces = Line3DCollection(np.stack((X_show[I_model_semivisible],
+                                                           X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]),
+                                                          axis=1),
+                                                 linewidth=1.0, colors='red', linestyle='--', alpha=0.5)
+            ax0.add_collection(X_proj_semitraces)
+        else:
+            X_proj_traces = Line3DCollection(np.stack((X_show[I_model_visible],
+                                                       X_proj_show),
+                                                      axis=1),
+                                             linewidth=1.0, colors='red', alpha=0.5)
         ax0.add_collection(X_proj_traces)
-        X_proj_semitraces = Line3DCollection(np.stack((X_show[I_model_semivisible], X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]), axis=1),
-                                             linewidth=1.0, colors='red', linestyle='--', alpha=0.5)
-        ax0.add_collection(X_proj_semitraces)
+        
         X_proj_points = ax0.scatter(*X_proj_show.T, marker='o', s=3, color='red', alpha=0.5)
 
     camera_dir_line, = ax0.plot(*np.vstack((C_show[j_slider.val,:], C_show[j_slider.val,:] + f * camera_dir_rot)).T,
@@ -1019,7 +1216,6 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     ax0.add_collection3d(corners_surface)
 
     ax1 = fig.add_subplot(1, 2, 2)
-    assert isinstance(ax1, Axes)
     ax1.set_xlim((1.0-frame_scale)*W, frame_scale*W)
     ax1.set_ylim(frame_scale*H, (1.0-frame_scale)*H)
     ax1.set_aspect('equal')
@@ -1029,8 +1225,15 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     dist = distance(X, C, Theta, _validate=False)
     dist /= dist.max()
     if I_model_visible.size > 0:
-        X_model_points = ax1.scatter(*X_model[I_model_boundary_visible,:].T, s=dist_scale/dist[I_model_boundary_visible,j_slider.val],
-                                     marker='o', color='red', alpha=np.full(I_model_boundary_visible.size, 0.5)+0.5*np.isin(I_model_boundary_visible, I_both_visible), zorder=10)
+        if X_pix is not None:
+            X_model_points_alpha = np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_both_visible)
+        else:
+            X_model_points_alpha = np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_model_visible)
+        X_model_points = ax1.scatter(*X_model[I_model_boundary_visible,:].T,
+                                     s=dist_scale/dist[I_model_boundary_visible,j_slider.val],
+                                     marker='o', color='red',
+                                     alpha=X_model_points_alpha,
+                                     zorder=10)
     else:
         X_model_points = ax1.scatter([], [], marker='o', color='red', zorder=10)
 
@@ -1057,13 +1260,14 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
 
         X_model = transform(X, C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), phi_x, W, H,
                             delete_back_points=True, delete_boundary_points=False, _validate=False)[:,0,:]
-        I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
         I_model_visible = np.where(~np.isnan(X_model[:,0]))[0]
         I_model_boundary = np.where((X_model[:,0] < 0) | (X_model[:,0] >= W) | (X_model[:,1] < 0) | (X_model[:,1] >= H))[0]
         I_model_boundary_visible = I_model_visible.copy()
         I_model_visible = np.sort(np.array(list(set(I_model_visible) - set(I_model_boundary)), dtype=np.int64))
-        I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
-        I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
+        if X_pix is not None:
+            I_pix_visible = np.where(X_pix[:,j_slider.val,0] >= 0)[0]
+            I_model_semivisible = np.array(list(set(I_model_visible) - set(I_pix_visible)), dtype=np.int64)
+            I_both_visible = np.array(list(set(I_pix_visible) & set(I_model_visible)), dtype=np.int64)
         X_visible_points._offsets3d = X_show[I_model_visible,:].T
         I_model_not_visible = np.array(list(set(range(N)) - set(I_model_visible)), dtype=np.int64)
         X_not_visible_points._offsets3d = X_show[I_model_not_visible,:].T
@@ -1071,14 +1275,22 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
         if show_image_lines:
             X_proj = project(X[I_model_visible], C[j_slider.val].reshape(1, -1), Theta[j_slider.val].reshape(1, -1), f, _validate=False)[:,0,:]
             X_proj_show = rotate_array(X_proj, Ryz, _validate=False)
-            X_proj_traces.set_segments(np.stack((X_show[I_both_visible], X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]), axis=1))
-            X_proj_semitraces.set_segments(np.stack((X_show[I_model_semivisible], X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]), axis=1))
+            if X_pix is not None:
+                X_proj_traces.set_segments(np.stack((X_show[I_both_visible],
+                                                     X_proj_show[np.searchsorted(I_model_visible, I_both_visible)]),
+                                                    axis=1))
+                X_proj_semitraces.set_segments(np.stack((X_show[I_model_semivisible],
+                                                         X_proj_show[np.searchsorted(I_model_visible, I_model_semivisible)]),
+                                                        axis=1))
+            else:
+                X_proj_traces.set_segments(np.stack((X_show[I_model_visible],
+                                                     X_proj_show),
+                                                    axis=1))
             X_proj_points._offsets3d = X_proj_show.T
 
         R = ryxz(Theta[j_slider.val].reshape(1, -1), _validate=False)[0]
-        camera_dir_rot = camera_dir @ R.T
+        camera_dir_rot = R @ camera_dir
         camera_dir_rot = rotate_array(camera_dir_rot, Ryz, _validate=False)
-        camera_dir_rot = camera_dir_rot.ravel()
         camera_corners_rot = camera_corners @ R.T
         camera_corners_rot = rotate_array(camera_corners_rot, Ryz, _validate=False)
 
@@ -1093,8 +1305,12 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
         if I_model_visible.size > 0:
             X_model_points.set_visible(True)
             X_model_points.set_offsets(X_model[I_model_boundary_visible,:])
-            X_model_points.set_sizes(dist_scale/dist[I_model_boundary_visible,j_slider.val])
-            X_model_points.set_alpha(np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_both_visible))
+            X_model_points.set_sizes(dist_scale / dist[I_model_boundary_visible,j_slider.val])
+            if X_pix is not None:
+                X_model_points_alpha = np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_both_visible)
+            else:
+                X_model_points_alpha = np.full(I_model_boundary_visible.size, 0.5) + 0.5 * np.isin(I_model_boundary_visible, I_model_visible)
+            X_model_points.set_alpha(X_model_points_alpha)
         else:
             X_model_points.set_visible(False)
 
@@ -1120,13 +1336,28 @@ def draw_2d_3d_scene(fig, j_slider, X, C, Theta, phi_x, W, H, X_pix=None, image_
     
     fig.canvas.mpl_connect('key_press_event', j_key)
     
-
     if ret_axis: return ax0, ax1
 
 
-def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H, X_pix,
-                 j_ids, image_paths=None, dist_scale=10.0, f=0.2, trajectory_markers=False,
-                 axis_off=False, grid_off=False, ret_axis=False):
+def draw_fitting(
+        fig: Figure,
+        t_slider: Slider,
+        X_array: NDArray[np.floating],
+        C_array: NDArray[np.floating],
+        Theta_array: NDArray[np.floating],
+        phi_x_array: NDArray[np.floating],
+        W: int,
+        H: int,
+        X_pix: NDArray[np.floating],
+        j_ids: Union[list[int], NDArray[np.integer]],
+        image_paths: Optional[Union[list[str], NDArray[np.str_]]] = None,
+        dist_scale: float = 10.0,
+        f: float = 0.2,
+        trajectory_markers: bool = False,
+        axis_off: bool = False,
+        grid_off: bool = False,
+        ret_axis: bool = False
+    ) -> Optional[tuple[Axes3D, list[Axes]]]:
     if X_array.ndim != 3:
         raise ValueError(f'Expected X_array to have ndim = 3, got {X_array.ndim}')
     P = X_array.shape[0]
@@ -1144,8 +1375,6 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
     if image_paths is not None:
         if image_paths.size != 3:
             raise ValueError('Expected image_paths to have size 3.')
-
-    assert isinstance(t_slider, Slider)
 
     gs = fig.add_gridspec(nrows=3, ncols=2)
     ax0 = fig.add_subplot(gs[:,0], projection='3d')
@@ -1197,18 +1426,18 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
                                        linewidth=1.0, linestyle='--', colors='blue')
     ax0.add_collection(camera_dir_line)
 
-    center_to_corners = Line3DCollection(np.stack((np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3),
-                                                   np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot), axis=2).reshape(-1, 2, 3),
+    C_points_show_repeat = np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3)
+    center_to_corners = Line3DCollection(np.stack((C_points_show_repeat,
+                                                   C_points_show_repeat + f * camera_corners_rot), axis=2).reshape(-1, 2, 3),
                                          linewidth=1.0, colors='blue')
     ax0.add_collection(center_to_corners)
 
-    corners_surface = Poly3DCollection(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot,
+    corners_surface = Poly3DCollection(C_points_show_repeat + f * camera_corners_rot,
                                        linewidths=1.0, edgecolors='blue', facecolor='blue', alpha=0.25)
     ax0.add_collection3d(corners_surface)
 
     axs = [fig.add_subplot(gs[i,1]) for i in range(3)]
     for ax in axs:
-        assert isinstance(ax, Axes)
         ax.set_xlim(0, W)
         ax.set_ylim(H, 0)
         ax.set_aspect('equal')
@@ -1259,9 +1488,10 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 
         camera_dir_line.set_segments(np.stack((C_points_show,
                                                C_points_show + f * camera_dir_rot), axis=1))
-        center_to_corners.set_segments(np.stack((np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3),
-                                                 np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot), axis=2).reshape(-1, 2, 3))
-        corners_surface.set_verts(np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3) + f * camera_corners_rot)
+        C_points_show_repeat = np.repeat(C_points_show, 4, axis=0).reshape(-1, 4, 3)
+        center_to_corners.set_segments(np.stack((C_points_show_repeat,
+                                                 C_points_show_repeat + f * camera_corners_rot), axis=2).reshape(-1, 2, 3))
+        corners_surface.set_verts(C_points_show_repeat + f * camera_corners_rot)
 
         X_model = transform(X_array[t_slider.val], C_array[t_slider.val,j_ids], Theta_array[t_slider.val,j_ids], phi_x_array[t_slider.val],
                             W, H, delete_back_points=True, delete_boundary_points=True, _validate=False)
@@ -1276,6 +1506,14 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
             X_lines[j].set_segments(np.stack((X_model[I_both_visible,j,:], X_pix_center[I_both_visible,j,:]), axis=1))
 
     t_slider.on_changed(update)
+
+    def t_key(event):
+        if event.key in ('d', 'в') and t_slider.val < t_slider.valmax:
+            t_slider.set_val(t_slider.val + t_slider.valstep)
+        elif event.key in ('a', 'ф') and t_slider.val > t_slider.valmin:
+            t_slider.set_val(t_slider.val - t_slider.valstep)
+    
+    fig.canvas.mpl_connect('key_press_event', t_key)
 
     if ret_axis: return ax0, axs
 
@@ -1299,57 +1537,421 @@ def draw_fitting(fig, t_slider, X_array, C_array, Theta_array, phi_x_array, W, H
 #     return R
 
 
-def get_X_from_C_Theta(X_pix, C, Theta, phi_x, W, H, method='LT', normalized=False, _validate=True):
+# def get_X_from_C_Theta(
+#         X_pix: NDArray[np.integer],
+#         C: NDArray[np.floating],
+#         Theta: NDArray[np.floating],
+#         phi_x: Union[np.floating, float],
+#         W: int,
+#         H: int,
+#         method: Literal['LT', 'GT'] = 'LT',
+#         normalized: bool = False,
+#         _validate: bool = True
+#     ) -> NDArray[np.floating]:
+#     if _validate: N, K = validate_scene_arrays_shapes(X_pix=X_pix, C=C, Theta=Theta, ret_shapes=True)
+#     else: N, K = X_pix.shape[:2]
+
+#     if (problem := np.where((X_pix[:,:,0] >= 0).sum(axis=1) < 2)[0]).size > 0:
+#         print(f'Too little information for points: {problem}')
+
+#     if method == 'LT':        
+#         if not normalized:
+#             X_pix_center = X_pix + 0.5
+
+#             f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
+#             p_x, p_y = W / 2.0, H / 2.0
+#         else:
+#             WH_max = max(W, H)
+#             X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
+
+#             f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
+#             p_x = p_y = 0.0
+
+#         X_pix_center[X_pix[:,:,0] < 0] = np.nan
+        
+#         K_ = np.array([[f_x, 0.0, p_x],
+#                        [0.0, f_y, p_y],
+#                        [0.0, 0.0, 1.0]])
+        
+#         RT = ryxz(Theta, _validate=False).transpose(0, 2, 1)
+#         RTC = np.concatenate((RT, - ((RT @ C[:,:,np.newaxis])[:,:,0]).reshape(-1, 3, 1)), axis=2)        # np.einsum('jkl,jl->jk', RT, C)
+
+#         P = K_ @ RTC    # np.einsum('kl,jln->jkn', K_, RTC)
+
+#         A_3dim = np.zeros((N, 2 * K, 4))
+#         A_3dim[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+#         A_3dim[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+#         A_3dim = np.nan_to_num(A_3dim)
+
+#         if (problem := np.where(np.linalg.matrix_rank(A_3dim) < 3)[0]).size > 0:
+#             print(f'Too small rank(A) for points: {problem}')
+
+#         A_3dim_mat, A_2dim_vec = A_3dim[:,:,:-1], A_3dim[:,:,-1]
+#         A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_3dim_mat, A_3dim_mat)
+#         A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_2dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_3dim_mat, A_3dim_vec)
+#         X = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
+    
+#     elif method == 'GT':
+#         V = reverse_project(X_pix, C, Theta, phi_x, W, H, dir_only=True, _validate=False)
+#         V /= np.linalg.norm(V, axis=2, keepdims=True)
+#         V_flat = V.reshape(N * K, 3)
+#         eye_VVt = np.eye(3) - (V_flat[:,:,np.newaxis] @ V_flat[:,np.newaxis,:]).reshape(N, K, 3, 3)     #  np.einsum('ijk,ijl->ijkl', V, V)
+#         X = np.linalg.solve((eye_VVt.reshape(N, K, 9).transpose(0, 2, 1) @ np.ones(K)).reshape(N, 3, 3),        # eye_VVt.sum(axis=1)
+#                             (eye_VVt.transpose(0, 2, 1, 3).reshape(3 * N, 3 * K) @ C.ravel()).reshape(N, 3))        # np.einsum('ijkl,jl->ijk', eye_VVt, C).sum(axis=1)
+
+#     return X
+
+
+# def get_X_from_C_Theta(
+#         X_pix: NDArray[np.integer],
+#         C: NDArray[np.floating],
+#         Theta: NDArray[np.floating],
+#         phi_x: Union[np.floating, float],
+#         W: int,
+#         H: int,
+#         normalized: bool = False,
+#         _validate: bool = True
+#     ) -> NDArray[np.floating]:
+#     if _validate: N, K = validate_scene_arrays_shapes(X_pix=X_pix, C=C, Theta=Theta, ret_shapes=True)
+#     else: N, K = X_pix.shape[:2]
+
+#     X_visible = X_pix[:,:,0] >= 0
+#     if (X_visible.sum(axis=1) < 2).all():
+#         raise ValueError(f'Expected each point to be visible at least 2 times')
+
+#     X_pix_center = np.full_like(X_pix, np.nan, dtype=np.float64)
+#     if not normalized:
+#         X_pix_center[X_visible] = X_pix[X_visible] + 0.5
+
+#         f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
+#         p_x, p_y = W / 2.0, H / 2.0
+#     else:
+#         WH_max = max(W, H)
+#         X_pix_center[X_visible] = (X_pix[X_visible] + 0.5 - 0.5 * np.array([W, H])) / WH_max
+
+#         f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
+#         p_x = p_y = 0.0
+
+#     K_ = np.array([[f_x, 0.0, p_x],
+#                    [0.0, f_y, p_y],
+#                    [0.0, 0.0, 1.0]])
+
+#     RT = ryxz(Theta, _validate=False).transpose(0, 2, 1)
+#     RTC = np.concatenate((RT, - ((RT @ C[:,:,np.newaxis])[:,:,0]).reshape(-1, 3, 1)), axis=2)        # np.einsum('jkl,jl->jk', RT, C)
+
+#     P = K_ @ RTC        # np.einsum('kl,jln->jkn', K_, RTC)
+
+#     A_3dim = np.zeros((N, 2 * K, 4))
+#     A_3dim[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+#     A_3dim[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+#     A_3dim = np.nan_to_num(A_3dim)
+
+#     X = np.full((N, 3), np.nan)
+#     I_good = np.where(np.linalg.matrix_rank(A_3dim) >= 3)[0]
+#     if I_good.size == 0:
+#         warn('Unable to solve the problem for any point')
+#         return X
+
+#     A_3dim_mat, A_2dim_vec = A_3dim[I_good,:,:-1], A_3dim[I_good,:,-1]
+#     A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_3dim_mat, A_3dim_mat)
+#     A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_2dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_3dim_mat, A_3dim_vec)
+#     X[I_good] = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
+
+#     return X
+
+def get_X_from_C_Theta(
+        X_pix: NDArray[np.integer],
+        C: NDArray[np.floating],
+        Theta: NDArray[np.floating],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        normalized: bool = False,
+        _validate: bool = True
+    ) -> NDArray[np.floating]:
     if _validate: N, K = validate_scene_arrays_shapes(X_pix=X_pix, C=C, Theta=Theta, ret_shapes=True)
     else: N, K = X_pix.shape[:2]
 
-    if method == 'LT':        
-        if not normalized:
-            X_pix_center = X_pix + 0.5
+    X = np.full((N, 3), np.nan)
 
-            f_x = f_y = W / 2.0 / np.tan(phi_x / 2)
-            p_x, p_y = W / 2.0, H / 2.0
-        else:
-            WH_max = max(W, H)
-            X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
+    X_visible = X_pix[:,:,0] >= 0
+    I0 = np.where(X_visible.sum(axis=1) >= 2)[0]
+    N0 = I0.size
+    if N0 == 0:
+        warn(f'Expected each point to be visible at least 2 times')
+        return X
+    J0 = np.where(X_visible[I0,:].sum(axis=0))[0]
+    K0 = J0.size
+    IJ0 = np.ix_(I0, J0)
 
-            f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2)
-            p_x = p_y = 0.0
+    X_pix_center = np.full((N0, K0, 2), np.nan)
+    if not normalized:
+        X_pix_center[X_visible[IJ0]] = X_pix[IJ0][X_visible[IJ0]] + 0.5
 
-        X_pix_center[X_pix[:,:,0] < 0] = np.nan
-        
-        K_ = np.array([[f_x, 0.0, p_x],
-                       [0.0, f_y, p_y],
-                       [0.0, 0.0, 1.0]])
-        
-        RT = ryxz(Theta).transpose(0, 2, 1)
-        RTC = np.concatenate((RT, - ((RT @ C[:,:,np.newaxis])[:,:,0]).reshape(-1, 3, 1)), axis=2)        # np.einsum('jkl,jl->jk', RT, C)
+        f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
+        p_x, p_y = W / 2.0, H / 2.0
+    else:
+        WH_max = max(W, H)
+        X_pix_center[X_visible[IJ0]] = (X_pix[IJ0][X_visible[IJ0]] + 0.5 - 0.5 * np.array([W, H])) / WH_max
 
-        P = K_ @ RTC    # np.einsum('kl,jln->jkn', K_, RTC)
+        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
+        p_x = p_y = 0.0
 
-        A_array = np.zeros((N, 2 * K, 4))
-        A_array[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
-        A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
-        A_array = np.nan_to_num(A_array)
+    K_ = np.array([[f_x, 0.0, p_x],
+                   [0.0, f_y, p_y],
+                   [0.0, 0.0, 1.0]])
 
-        A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
-        lstsq_mat = A_array_mat.transpose(0, 2, 1) @ A_array_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
-        lstsq_vec = (A_array_mat.transpose(0, 2, 1) @ A_array_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
-        X = - np.linalg.solve(lstsq_mat, lstsq_vec)
-    
-    elif method == 'GT':
-        V = reverse_project(X_pix, C, Theta, phi_x, W, H, dir_only=True, _validate=False)
-        V /= np.linalg.norm(V, axis=2, keepdims=True)
-        V_flat = V.reshape(N * K, 3)
-        eye_VVt = np.eye(3) - (V_flat[:,:,np.newaxis] @ V_flat[:,np.newaxis,:]).reshape(N, K, 3, 3)     #  np.einsum('ijk,ijl->ijkl', V, V)
-        X = np.linalg.solve((eye_VVt).sum(axis=1), np.einsum('ijkl,jl->ijk', eye_VVt, C).sum(axis=1))
+    RT = ryxz(Theta[J0,:], _validate=False).transpose(0, 2, 1)
+    RTC = np.concatenate((RT, - ((RT @ C[J0,:,np.newaxis])[:,:,0]).reshape(-1, 3, 1)), axis=2)        # np.einsum('jkl,jl->jk', RT, C[C[J0,:]])
+
+    P = K_ @ RTC        # np.einsum('kl,jln->jkn', K_, RTC)
+
+    A_3dim = np.zeros((N0, 2 * K0, 4))
+    A_3dim[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+    A_3dim[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+    A_3dim = np.nan_to_num(A_3dim)
+
+    I1 = np.where(np.linalg.matrix_rank(A_3dim) >= 3)[0]
+    if I1.size == 0:
+        warn('Unable to solve the problem for any point, too little valuable information')
+        return X
+    J1 = np.where(X_visible[IJ0][I1,:].sum(axis=0))[0]
+    J1_ = np.repeat(2 * J1, repeats=2)
+    J1_[1::2] += 1
+    IJ1_ = np.ix_(I1, J1_)
+
+    A_3dim_mat, A_2dim_vec = A_3dim[IJ1_][:,:,:-1], A_3dim[IJ1_][:,:,-1]
+    A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_3dim_mat, A_3dim_mat)
+    A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_2dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_3dim_mat, A_3dim_vec)
+    X[I0[I1]] = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
 
     return X
 
 
-def get_C_Theta_from_X(X, X_pix, phi_x, W, H, normalized=False, _validate=True):
+# def get_C_Theta_from_X(
+#         X_pix: NDArray[np.integer],
+#         X: NDArray[np.floating],
+#         phi_x: Union[np.floating, float],
+#         W: int,
+#         H: int,
+#         normalized: bool = False,
+#         _validate: bool = True
+#     ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+#     if _validate: N, K = validate_scene_arrays_shapes(X=X, X_pix=X_pix, ret_shapes=True)
+#     else: N, K = X_pix.shape[:2]
+
+#     X_visible = X_pix[:,:,0] >= 0
+#     if (X_visible.sum(axis=0) < 6).all():
+#         raise ValueError(f'Expected each camera to have at least 6 visible points')
+
+#     X_pix_center = np.full_like(X_pix, np.nan, dtype=np.float64)
+#     if not normalized:
+#         X_pix_center[X_visible] = X_pix[X_visible] + 0.5
+
+#         f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
+#         p_x, p_y = W / 2.0, H / 2.0
+#     else:
+#         WH_max = max(W, H)
+#         X_pix_center[X_visible] = (X_pix[X_visible] + 0.5 - 0.5 * np.array([W, H])) / WH_max
+
+#         f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
+#         p_x = p_y = 0.0
+
+#     K_inv = np.array([[1.0 / f_x, 0.0, - p_x / f_x],
+#                       [0.0, 1.0 / f_y, - p_y / f_y],
+#                       [0.0,       0.0,         1.0]])
+
+#     X_hom = np.ones((N, 4))
+#     X_hom[:,:3] = X
+
+#     A_3dim = np.zeros((K, 2 * N, 12))
+#     A_3dim[:,::2,:4] = A_3dim[:,1::2,4:8] = - X_hom
+#     A_3dim[:, ::2,8:12] = X_pix_center[:,:,0].T[:,:,np.newaxis] * X_hom
+#     A_3dim[:,1::2,8:12] = X_pix_center[:,:,1].T[:,:,np.newaxis] * X_hom
+#     A_3dim_nan = np.isnan(A_3dim[:,:,0]) | np.isnan(A_3dim[:,:,4]) | np.isnan(A_3dim[:,:,8])
+#     A_3dim[A_3dim_nan] = 0.0
+
+#     C, Theta = np.full((2, K, 3), np.nan)
+#     J_good = np.where(np.linalg.matrix_rank(A_3dim) >= 11)[0]
+#     if J_good.size == 0:
+#         warn('Unable to solve the problem for any camera')
+#         return C, Theta
+
+#     if N * J_good.size <= 25000:
+#         U, Sigma, Vh = np.linalg.svd(A_3dim[J_good])
+#         P_3dim = Vh[:,-1,:].reshape(J_good.size, 3, 4)
+#     else:
+#         P_3dim = np.zeros((J_good.size, 3, 4))
+#         for j_, j in enumerate(J_good):
+#             _, p = eigsh(A_3dim[j].T @ A_3dim[j], k=1, which='SM')
+#             P_3dim[j_] = p.reshape(3, 4)
+
+#     RT_scaled = K_inv @ P_3dim
+
+#     R_scaled, T_scaled = RT_scaled[:,:,:3], RT_scaled[:,:,3]
+
+#     U, Sigma, Vh = np.linalg.svd(R_scaled)
+#     R = (U @ Vh).transpose(0, 2, 1)
+#     T = T_scaled / Sigma.mean(axis=1, keepdims=True)
+#     C[J_good] = - (R @ T[:,:,np.newaxis])[:,:,0]      # - np.einsum('jkl,jl->jk', R, T)
+#     R *= np.sign(np.linalg.det(R))[:,np.newaxis,np.newaxis]
+#     Theta[J_good] = get_Theta(R)
+
+#     return C, Theta
+
+def get_C_Theta_from_X(
+        X_pix: NDArray[np.integer],
+        X: NDArray[np.floating],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        normalized: bool = False,
+        _validate: bool = True
+    ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     if _validate: N, K = validate_scene_arrays_shapes(X=X, X_pix=X_pix, ret_shapes=True)
     else: N, K = X_pix.shape[:2]
+
+    C, Theta = np.full((2, K, 3), np.nan)
+
+    X_visible = X_pix[:,:,0] >= 0
+    J0 = np.where(X_visible.sum(axis=0) >= 6)[0]
+    K0 = J0.size
+    if K0 == 0:
+        raise ValueError(f'Expected each camera to have at least 6 visible points')
+    I0 = np.where(X_visible[:,J0].sum(axis=1))[0]
+    N0 = I0.size
+    IJ0 = np.ix_(I0, J0)
+
+    X_pix_center = np.full((N0, K0, 2), np.nan)
+    if not normalized:
+        X_pix_center[X_visible[IJ0]] = X_pix[IJ0][X_visible[IJ0]] + 0.5
+
+        f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
+        p_x, p_y = W / 2.0, H / 2.0
+    else:
+        WH_max = max(W, H)
+        X_pix_center[X_visible[IJ0]] = (X_pix[IJ0][X_visible[IJ0]] + 0.5 - 0.5 * np.array([W, H])) / WH_max
+
+        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
+        p_x = p_y = 0.0
+
+    K_inv = np.array([[1.0 / f_x, 0.0, - p_x / f_x],
+                      [0.0, 1.0 / f_y, - p_y / f_y],
+                      [0.0,       0.0,         1.0]])
+
+    X_hom = np.ones((N0, 4))
+    X_hom[:,:3] = X[I0,:]
+
+    A_3dim = np.zeros((K0, 2 * N0, 12))
+    A_3dim[:,::2,:4] = A_3dim[:,1::2,4:8] = - X_hom
+    A_3dim[:, ::2,8:12] = X_pix_center[:,:,0].T[:,:,np.newaxis] * X_hom
+    A_3dim[:,1::2,8:12] = X_pix_center[:,:,1].T[:,:,np.newaxis] * X_hom
+    A_3dim_nan = np.isnan(A_3dim[:,:,0]) | np.isnan(A_3dim[:,:,4]) | np.isnan(A_3dim[:,:,8])
+    A_3dim[A_3dim_nan] = 0.0
+
+    J1 = np.where(np.linalg.matrix_rank(A_3dim) >= 11)[0]
+    K1 = J1.size
+    if K1 == 0:
+        warn('Unable to solve the problem for any camera, too little valuable information')
+        return C, Theta
+    I1 = np.where(X_visible[IJ0][:,J1].sum(axis=1))[0]
+    N1 = I1.size
+    I1_ = np.repeat(2 * I1, repeats=2)
+    I1_[1::2] += 1
+    JI1_ = np.ix_(J1, I1_)
+
+    if N1 * K1 <= 25000:
+        U, Sigma, Vh = np.linalg.svd(A_3dim[JI1_])
+        P_3dim = Vh[:,-1,:].reshape(K1, 3, 4)
+    else:
+        P_3dim = np.zeros((K1, 3, 4))
+        for j_, j in enumerate(J1):
+            _, p = eigsh(A_3dim[j,I1_].T @ A_3dim[j,I1_], k=1, which='SM')
+            P_3dim[j_] = p.reshape(3, 4)
+
+    RT_scaled = K_inv @ P_3dim
+
+    R_scaled, T_scaled = RT_scaled[:,:,:3], RT_scaled[:,:,3]
+
+    U, Sigma, Vh = np.linalg.svd(R_scaled)
+    R = (U @ Vh).transpose(0, 2, 1)
+    T = T_scaled / Sigma.mean(axis=1, keepdims=True)
+    C[J0[J1]] = - (R @ T[:,:,np.newaxis])[:,:,0]      # - np.einsum('jkl,jl->jk', R, T)
+
+    R *= np.sign(np.linalg.det(R))[:,np.newaxis,np.newaxis]
+    Theta[J0[J1]] = get_Theta(R)
+
+    return C, Theta
+
+
+def fundamental_matrix(
+        X_pix: NDArray[np.integer],
+        make_rank_2: bool = True,
+        normalize: bool = False,
+        W: Optional[int] = None,
+        H: Optional[int] = None,
+        _validate: bool = True
+    ) -> Union[NDArray[np.floating], tuple[NDArray[np.floating], NDArray[np.floating]]]:
+    if _validate:
+        N, K = validate_scene_arrays_shapes(X_pix=X_pix, ret_shapes=True)
+        if N < 8:
+            raise ValueError('Expected X_pix to have shape[0] >= 8')
+        if K != 2:
+            raise ValueError('Expected X_pix to have shape[1] = 2')
+        if (X_pix[:,:,0] < 0).sum() > 0:
+            raise ValueError('Expected all points in X_pix to be visible')
+        if normalize and (W is None or H is None):
+            raise ValueError('With normalize = True both W and H have to be passed')
+    else: N = X_pix.shape[0]
+
+    if not normalize:
+        X_pix_center = X_pix + 0.5
+    else:
+        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
+
+    X_hom = np.ones((N, 2, 3))
+    X_hom[:,:,:2] = X_pix_center
+
+    A = (X_hom[:,1,:][:,:,np.newaxis] @ X_hom[:,0,:][:,np.newaxis,:]).reshape(N, 9)
+    if np.linalg.matrix_rank(A) < 8:
+        # raise ValueError('Unable to solve the problem, expected rank(A) >= 8')
+        warn('Unable to solve the problem, too little valuable information')
+        return np.full((3, 3), np.nan)
+
+    U, sigma, Vh = np.linalg.svd(A)
+    f = Vh[-1,:]
+    F = f.reshape(3, 3)
+
+    if make_rank_2:
+        U, sigma, Vh = np.linalg.svd(F)
+        sigma[-1] = 0.0
+        F = U @ np.diag(sigma) @ Vh
+
+    return F
+
+
+def get_X_C_Theta_from_F(
+        X_pix: NDArray[np.integer],
+        F: NDArray[np.floating],
+        W: int,
+        H: int,
+        phi_x: Union[np.floating, float],
+        ret_status: bool = False,
+        normalized: bool = False,
+        _validate: bool = True
+    ) -> Union[tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]],
+               tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], bool]]:
+    if _validate:
+        N, K = validate_scene_arrays_shapes(X_pix=X_pix, ret_shapes=True)
+        if K != 2:
+            raise ValueError('Expected X_pix to have shape[1] = 2')
+        if (X_pix[:,:,0] < 0).sum() > 0:
+            raise ValueError('Expected all points in X_pix to be visible')
+        if F.shape != (3, 3):
+            raise ValueError('Expected F to have shape = (3, 3)')
+        if np.isnan(F).any():
+            raise ValueError('Expected F not to have nan values')
+    else: N = X_pix.shape[0]
     
     if not normalized:
         X_pix_center = X_pix + 0.5
@@ -1357,111 +1959,11 @@ def get_C_Theta_from_X(X, X_pix, phi_x, W, H, normalized=False, _validate=True):
         f_x = f_y = W / 2.0 / np.tan(phi_x / 2.0)
         p_x, p_y = W / 2.0, H / 2.0
     else:
-        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
-
-        f_x = f_y = W / max(W, H) / 2.0 / np.tan(phi_x / 2.0)
-        p_x = p_y = 0.0
-    
-    X_pix_center[X_pix[:,:,0] < 0] = np.nan
-
-    if (problem := np.where((X_pix[:,:,0] >= 0).sum(axis=0) < 6)[0]).size > 0:
-        print(f'{problem = }')
-
-    K_ = np.array([[f_x, 0.0, p_x],
-                   [0.0, f_y, p_y],
-                   [0.0, 0.0, 1.0]])
-
-    X_hom = np.ones((N, 4))
-    X_hom[:,:3] = X
-
-    A_array = np.zeros((K, 2 * N, 12))
-    A_array[:,::2,:4] = A_array[:,1::2,4:8] = - X_hom
-    A_array[:, ::2,8:12] = X_pix_center[:,:,0].T[:,:,np.newaxis] * X_hom
-    A_array[:,1::2,8:12] = X_pix_center[:,:,1].T[:,:,np.newaxis] * X_hom
-    # A_array = np.nan_to_num(A_array)
-    A_array_nan = np.where(np.isnan(A_array[:,:,0]) | np.isnan(A_array[:,:,4]) | np.isnan(A_array[:,:,8]))
-    A_array[A_array_nan] = 0.0
-
-    if N * K <= 25000:
-        U, sigma, Vh = np.linalg.svd(A_array)
-        P_array = Vh[:,-1,:].reshape(K, 3, 4)
-    else:
-        P_array = np.zeros((K, 3, 4))
-        for j in range(K):
-            w = eigsh(A_array[j].T @ A_array[j], k=1, which='SM')[1]
-            P_array[j] = w.reshape(3, 4)
-
-    RT = np.linalg.solve(K_, P_array)
-
-    R, T = RT[:,:,:3], RT[:,:,3]
-
-    U, sigma, Vh = np.linalg.svd(R)
-    R_rot = (U @ Vh).transpose(0, 2, 1)
-    C = - (R_rot @ T[:,:,np.newaxis])[:,:,0] / sigma.mean(axis=1, keepdims=True)       # np.einsum('jkl,jl->jk', R_rot, T)
-    R_rot *= np.sign(np.linalg.det(R_rot))[:,np.newaxis,np.newaxis]
-
-    Theta = get_Theta(R_rot)
-
-    return C, Theta
-
-
-def fundamental_matrix(X_pix, make_rank_2=True, ret_A=False, normalize=False, W=None, H=None, _validate=True):
-    if _validate:
-        N, K = validate_scene_arrays_shapes(X_pix=X_pix, ret_shapes=True)
-        if N < 8:
-            raise ValueError('Expected X_pix to have shape[0] >= 8')
-        if K != 2:
-            raise ValueError('Expected X_pix to have shape[1] = 2')
-        if normalize and (W is None or H is None):
-            raise ValueError('With normalize=True W and H have to be passed')
-    else: N = X_pix.shape[0]
-
-    if not normalize:
-        X_pix_center = X_pix + 0.5
-    else:
-        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
-    
-    X_pix_center[X_pix[:,:,0] < 0] = np.nan
-
-    X_hom = np.ones((N, 2, 3))
-    X_hom[:,:,:2] = X_pix_center
-
-    A = (X_hom[:,1,:][:,:,np.newaxis] @ X_hom[:,0,:][:,np.newaxis,:]).reshape(N, 9)
-
-    U, sigma, Vh = np.linalg.svd(A)
-    f = Vh[-1]
-    # f = eigsh(A.T @ A, k=1, which='SM')[1]    # вроде иногда должно считаться быстрее, чем с np.linalg.svd(A)
-    F = f.reshape(3, 3)
-
-    if make_rank_2 and np.linalg.matrix_rank(F) != 2:
-        U, sigma, Vh = np.linalg.svd(F)
-        sigma[-1] = 0.0
-        F = U @ np.diag(sigma) @ Vh
-
-    if not ret_A: return F
-    else: return F, A
-
-
-def get_X_C_Theta_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=False, _validate=True):
-    if _validate:
-        N, K = validate_scene_arrays_shapes(X_pix=X_pix, ret_shapes=True)
-        if K != 2:
-            raise ValueError('Expected X_pix to have shape[1] = 2')
-    else: N = X_pix.shape[0]
-    
-    if not normalized:
-        X_pix_center = X_pix + 0.5
-
-        f_x = f_y = W / 2.0 / np.tan(phi_x / 2)
-        p_x, p_y = W / 2.0, H / 2.0
-    else:
         WH_max = max(W, H)
         X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / WH_max
 
-        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2)
+        f_x = f_y = W / WH_max / 2.0 / np.tan(phi_x / 2.0)
         p_x = p_y = 0.0
-
-    X_pix_center[X_pix[:,:,0] < 0] = np.nan
 
     K_ = np.array([[f_x, 0.0, p_x],
                    [0.0, f_y, p_y],
@@ -1478,32 +1980,42 @@ def get_X_C_Theta_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=Fal
                    [0.0,  0.0, 1.0]])
     
     status = False
-    for k in range(4):
-        if k == 0: 
-            R = U @ W_ @ Vh
-            t = U[:,-1]
-        elif k == 1:
-            R = U @ W_ @ Vh
-            t = - U[:,-1]
-        elif k == 2:
-            R = U @ W_.T @ Vh
-            t = U[:,-1]
-        elif k == 3:
-            R = U @ W_.T @ Vh
-            t = - U[:,-1]
+    R_0 = U @ W_ @ Vh
+    R_1 = U @ W_.T @ Vh
+    if np.linalg.det(R_0) < 0:
+        R_0 = - R_0
+        R_1 = - R_1
+    t_0 = U[:,-1]
+    t_1 = - U[:,-1]
+    Rt_cases = ((R_0, t_0), (R_0, t_1), (R_1, t_0), (R_1, t_1))
+    # for k in range(4):
+    #     if k == 0: 
+    #         R = U @ W_ @ Vh
+    #         t = U[:,-1]
+    #     elif k == 1:
+    #         R = U @ W_ @ Vh
+    #         t = - U[:,-1]
+    #     elif k == 2:
+    #         R = U @ W_.T @ Vh
+    #         t = U[:,-1]
+    #     elif k == 3:
+    #         R = U @ W_.T @ Vh
+    #         t = - U[:,-1]
+    for Rt_case in Rt_cases:
+        R, t = Rt_case
         
-        if np.linalg.det(R) < 0: R = - R
+        # if np.linalg.det(R) < 0: R = - R
 
         P[1,:,:] = K_ @ np.column_stack((R, t))
 
-        A_array = np.zeros((N, 4, 4))
-        A_array[:,::2,:]  = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
-        A_array[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
+        A_3dim = np.zeros((N, 4, 4))
+        A_3dim[:, ::2,:] = X_pix_center[:,:,0][:,:,np.newaxis] * P[:,2,:] - P[:,0,:]
+        A_3dim[:,1::2,:] = X_pix_center[:,:,1][:,:,np.newaxis] * P[:,2,:] - P[:,1,:]
 
-        A_array_mat, A_array_vec = A_array[:,:,:-1], A_array[:,:,-1]
-        lstsq_mat = A_array_mat.transpose(0, 2, 1) @ A_array_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
-        lstsq_vec = (A_array_mat.transpose(0, 2, 1) @ A_array_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
-        X = - np.linalg.solve(lstsq_mat, lstsq_vec)
+        A_3dim_mat, A_3dim_vec = A_3dim[:,:,:-1], A_3dim[:,:,-1]
+        A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
+        A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_3dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
+        X = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
         
         C = np.vstack((np.zeros(3), - R.T @ t))
 
@@ -1518,21 +2030,26 @@ def get_X_C_Theta_from_F(X_pix, F, W, H, phi_x, ret_status=False, normalized=Fal
     else: return X, C, Theta, status
 
 
-def get_H_diff_matrix(X_pix, normalize=False, W=None, H=None, _validate=True):
+def get_H_diff_matrix(
+        X_pix: NDArray[np.integer],
+        normalize: bool = False,
+        W: Optional[int] = None,
+        H: Optional[int] = None,
+        _validate: bool = True
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
     if _validate:
         N, K = validate_scene_arrays_shapes(X_pix=X_pix, ret_shapes=True)
         if normalize and (W is None or H is None):
-            raise ValueError('With normalize=True W and H have to be passed')
+            raise ValueError('With normalize = True W and H have to be passed')
     else: N, K = X_pix.shape[:-1]
 
     X_visible = X_pix[:,:,0] >= 0
-
+    X_pix_center = np.full((N, K, 2), np.nan)
     if not normalize:
-        X_pix_center = X_pix + 0.5
+        X_pix_center[X_visible] = X_pix[X_visible] + 0.5
     else:
-        X_pix_center = (X_pix + 0.5 - 0.5 * np.array([W, H])) / max(W, H)
-
-    X_pix_center[~X_visible] = np.nan
+        WH_max = max(W, H)
+        X_pix_center[X_visible] = (X_pix[X_visible] + 0.5 - 0.5 * np.array([W, H])) / WH_max
 
     X_pix_hom = np.ones((N, K, 3))
     X_pix_hom[:,:,:2] = X_pix_center
@@ -1552,7 +2069,7 @@ def get_H_diff_matrix(X_pix, normalize=False, W=None, H=None, _validate=True):
             A[1::2,6:9] = X_pix_hom[i_subset,j,1][:,np.newaxis] * X_pix_hom[i_subset,i,:]
 
             h0 = np.eye(3).ravel()
-            h = eigsh(A.T @ A, k=1, which='SM', v0=h0)[1]
+            _, h = eigsh(A.T @ A, k=1, which='SM', v0=h0)
             H_ = h.reshape(3, 3)
 
             X_pix_hom_H = X_pix_hom[i_subset,i,:] @ H_.T
@@ -1564,23 +2081,47 @@ def get_H_diff_matrix(X_pix, normalize=False, W=None, H=None, _validate=True):
     return H_diff_matrix, i_size_matrix
 
 
-def find_phi_x(X_pix, W, H, i_size_matrix, H_diff_matrix, H_diff_opt, attempts=5, normalize=False, _validate=True):
+def find_phi_x(
+        X_pix: NDArray[np.integer],
+        W: int,
+        H: int,
+        i_size_matrix: NDArray[np.integer],
+        H_diff_matrix: NDArray[np.floating],
+        H_diff_opt: Union[np.floating, float],
+        attempts: int = 5,
+        normalize: bool = False,
+        _validate: bool = True
+    ) -> np.floating:
     if _validate: validate_scene_arrays_shapes(X_pix=X_pix)
     X_visible = X_pix[:,:,0] >= 0
     WH = np.array([W, H])
 
-    H_diff_matrix_log = np.log10(H_diff_matrix)
-    H_diff_matrix_log[H_diff_matrix_log < np.log10(H_diff_opt)] = np.nan
-    H_diff_matrix_log[H_diff_matrix_log > np.nanpercentile(H_diff_matrix_log, 95.0)] = np.nan
-    H_diff_matrix_log -= np.log10(H_diff_opt)
-    H_diff_matrix_log /= np.nanmax(H_diff_matrix_log)
+    # H_diff_matrix_log = np.log10(H_diff_matrix)
+    # H_diff_matrix_log[H_diff_matrix_log < np.log10(H_diff_opt)] = np.nan
+    # H_diff_matrix_log[H_diff_matrix_log > np.nanpercentile(H_diff_matrix_log, 95.0)] = np.nan
+    # H_diff_matrix_log -= np.log10(H_diff_opt)
+    # H_diff_matrix_log /= np.nanmax(H_diff_matrix_log)
 
-    opt_matrix = (i_size_matrix - 10) / (i_size_matrix.max() - 10) + H_diff_matrix_log
-    opt_matrix[opt_matrix > np.nanpercentile(opt_matrix, 75.0)] = np.nan
-    opt_matrix_notnan = np.where(~np.isnan(opt_matrix))
-    opt_matrix_argsort = np.argsort(opt_matrix[opt_matrix_notnan])[::-2][:attempts]
-    i_ids, j_ids = opt_matrix_notnan[0][opt_matrix_argsort], opt_matrix_notnan[1][opt_matrix_argsort]
+    # opt_matrix = (i_size_matrix - 10) / (i_size_matrix.max() - 10) + H_diff_matrix_log
+    # opt_matrix[opt_matrix > np.nanpercentile(opt_matrix, 75.0)] = np.nan
+    # opt_matrix_notnan = np.where(~np.isnan(opt_matrix))
+    # opt_matrix_argsort = np.argsort(opt_matrix[opt_matrix_notnan])[::-2][:attempts]
+    # i_ids, j_ids = opt_matrix_notnan[0][opt_matrix_argsort], opt_matrix_notnan[1][opt_matrix_argsort]
     
+    H_diff_max = np.nanpercentile(H_diff_matrix, 95.0)
+    H_diff_matrix_ = H_diff_matrix.copy()
+    H_diff_matrix_[H_diff_matrix_ < H_diff_opt] = np.nan
+    H_diff_matrix_[H_diff_matrix_ > H_diff_max] = np.nan
+    # приходится изворачиваться, так как нет np.nanargsort
+    H_diff_matrix_ravel = H_diff_matrix_.ravel()
+    H_diff_matrix_notnan = np.where(~np.isnan(H_diff_matrix_ravel))[0]
+    H_diff_matrix_notnan_argsort = np.argsort(H_diff_matrix_ravel[H_diff_matrix_notnan])
+    H_diff_matrix_argsort = H_diff_matrix_notnan[H_diff_matrix_notnan_argsort]
+    H_diff_pairs = np.sort(np.column_stack((np.unravel_index(H_diff_matrix_argsort[::-2][:attempts], H_diff_matrix.shape))), axis=1)
+    # i_ids, j_ids = np.unravel_index(H_diff_matrix_argsort[::-2][:attempts], H_diff_matrix.shape)
+    i_ids, j_ids = H_diff_pairs.T
+    # print(f'{i_ids = }, {j_ids = }')
+
     phi_x_array, h = np.linspace(0, np.pi, 53, retstep=True)
     phi_x_array = phi_x_array[1:-1]
 
@@ -1592,35 +2133,49 @@ def find_phi_x(X_pix, W, H, i_size_matrix, H_diff_matrix, H_diff_opt, attempts=5
         ij_subset = np.ix_(i_subset, [i, j])
         i_subset_list.append(i_subset)
         ij_subset_list.append(ij_subset)
-        F_array[k] = fundamental_matrix(X_pix[ij_subset], normalize=normalize, W=W, H=H)
+        F_array[k] = fundamental_matrix(X_pix[ij_subset], normalize=normalize, W=W, H=H, _validate=False)
     i_subset_sizes = np.array([i_subset.size for i_subset in i_subset_list])
+    # print(f'{i_subset_sizes = }')
 
     E_diff = np.inf
     while E_diff > 1e-5:
-        E_matrix = np.full((phi_x_array.size, attempts), np.inf)
+        # E_matrix = np.full((phi_x_array.size, attempts), np.inf)
+        E_matrix = np.full((phi_x_array.size, attempts), np.nan)
+        # E_array = np.full_like(phi_x_array, np.inf)
         for k, (i_subset, ij_subset, F) in enumerate(zip(i_subset_list, ij_subset_list, F_array)):
             X_test, C_test, Theta_test, phi_x_test = [], [], [], []
             success_ids = []
-            phi_x_good = np.where((phi_x_array > 0.0) & (phi_x_array < np.pi))[0]
-            for j, phi_x in enumerate(phi_x_array[phi_x_good]):
-                X_, C_, Theta_, success = get_X_C_Theta_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
+            phi_x_good_ids = np.where((phi_x_array > 0.0) & (phi_x_array < np.pi))[0]
+            for j, phi_x in enumerate(phi_x_array[phi_x_good_ids]):
+                X_, C_, Theta_, success = get_X_C_Theta_from_F(X_pix[ij_subset], F, W, H, phi_x,
+                                                               ret_status=True, normalized=normalize)
                 if success:
                     X_test.append(X_)
                     C_test.append(C_[1,:])
                     Theta_test.append(Theta_[1,:])
                     phi_x_test.append(phi_x)
-                    success_ids.append(phi_x_good[j])
+                    success_ids.append(phi_x_good_ids[j])
+            if not X_test: continue
             X_test, C_test, Theta_test, phi_x_test = np.array(X_test), np.array(C_test), np.array(Theta_test), np.array(phi_x_test)
             R_test = ryxz(Theta_test, _validate=False)
             X_test_rot = np.zeros((*X_test.shape[:2], 2, 3))
             X_test_rot[:,:,0,:] = X_test
             X_test_rot[:,:,1,:] = (X_test - C_test[:,np.newaxis,:]) @ R_test        # np.einsum('nlk,nil->nik', R_test, X_test - C_test[:,np.newaxis,:])
-            X_model_test = (W / np.tan(phi_x_test / 2)[:,np.newaxis,np.newaxis,np.newaxis] * X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] + WH) / 2.0
+            X_model_test = (W / np.tan(phi_x_test / 2.0)[:,np.newaxis,np.newaxis,np.newaxis] * X_test_rot[:,:,:,:2] / X_test_rot[:,:,:,2][:,:,:,np.newaxis] + WH) / 2.0
             X_pix_center = X_pix[ij_subset] + 0.5
             X_diff = X_model_test - X_pix_center
-            E_matrix[success_ids, k] = np.sum(X_diff**2, axis=(1, 2, 3))
-
-        E_array = np.sum(E_matrix / i_subset_sizes, axis=1)
+            # E_matrix[success_ids, k] = np.sum(X_diff**2, axis=(1, 2, 3))
+            E_matrix[success_ids, k] = np.sum(X_diff**2, axis=(1, 2, 3)) / i_subset_sizes[k]
+            # print(f'{success_ids = }')
+            # print(f'{np.sum(X_diff**2, axis=(1, 2, 3)) = }')
+            # E_array[success_ids] = np.mean(np.sum(X_diff**2, axis=(1, 2, 3)))
+        # print(f'{E_matrix = }')
+        # E_array = np.sum(E_matrix / i_subset_sizes, axis=1)
+        # E_array = np.nansum(E_matrix, axis=1)
+        E_array = np.nanmean(E_matrix, axis=1)
+        E_array[np.isnan(E_array)] = np.inf
+        # print(f'{E_array = }')
+        # print(f'{phi_x_array[np.argsort(E_array)] = }, {np.sort(E_array) = }')
         phi_x_opt = phi_x_array[np.argmin(E_array)]
         print(f'{phi_x_opt = }')
         phi_x_array, h = np.linspace(phi_x_opt - h, phi_x_opt + h, 51, retstep=True)
@@ -1629,7 +2184,15 @@ def find_phi_x(X_pix, W, H, i_size_matrix, H_diff_matrix, H_diff_opt, attempts=5
     return phi_x_opt
 
 
-def get_pair_subscenes(X_pix, phi_x, W, H, H_diff_bool, max_size=50, normalize=False):
+def get_pair_subscenes(
+        X_pix: NDArray[np.integer],
+        phi_x: Union[np.floating, float],
+        W: int,
+        H: int,
+        H_diff_bool: NDArray[np.bool_],
+        max_size: int = 50,
+        normalize: bool = False
+    ) -> tuple[list[NDArray[np.integer]], list[NDArray[np.floating]], list[NDArray[np.floating]], list[NDArray[np.floating]]]:
     N, K = validate_scene_arrays_shapes(X_pix=X_pix)
     # K = X_pix.shape[1]
     X_visible = X_pix[:,:,0] >= 0
