@@ -1,4 +1,4 @@
-NAME = "cameramodel"
+NAME = "pix2world"
 
 from typing import Any, Callable, Literal, Optional, Union
 from warnings import warn
