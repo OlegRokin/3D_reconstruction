@@ -1,6 +1,8 @@
 NAME = "cameramodel"
 
 from typing import Any, Callable, Literal, Optional, Union
+from warnings import warn
+from tqdm import tqdm
 import numpy as np
 from numpy.typing import NDArray
 from scipy.sparse.linalg import eigsh
@@ -9,13 +11,10 @@ from scipy.optimize import linprog
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from mpl_toolkits.mplot3d.axes3d import Axes3D
-import matplotlib.patches as patches
 from matplotlib.collections import LineCollection, PolyCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from matplotlib.widgets import Slider
 from matplotlib.image import imread
-from warnings import warn
-from tqdm import tqdm
 
 
 def validate_scene_arrays_shapes(
@@ -33,6 +32,8 @@ def validate_scene_arrays_shapes(
             raise ValueError(f'Expected X to have ndim = 2, got {X.ndim}')
         if X.shape[1] != 3:
             raise ValueError(f'Expected X to have shape[1] = 3, got {X.shape[1]}')
+        if np.isnan(X).any() or np.isinf(X).any():
+            raise ValueError(f'Expected X not to have nan or inf values')
         if ret_shapes or X_pix is not None:
             N = X.shape[0]
     if C is not None:
@@ -40,6 +41,8 @@ def validate_scene_arrays_shapes(
             raise ValueError(f'Expected C to have ndim = 2, got {C.ndim}')
         if C.shape[1] != 3:
             raise ValueError(f'Expected C to have shape[1] = 3, got {C.shape[1]}')
+        if np.isnan(C).any() or np.isinf(C).any():
+            raise ValueError(f'Expected C not to have nan or inf values')
         if ret_shapes or Theta is not None or R is not None or X_pix is not None:
             K = C.shape[0]
     if Theta is not None:
@@ -47,6 +50,8 @@ def validate_scene_arrays_shapes(
             raise ValueError(f'Expected Theta to have ndim = 2, got {Theta.ndim}')
         if Theta.shape[1] != 3:
             raise ValueError(f'Expected Theta to have shape[1] = 3, got {Theta.shape[1]}')
+        if np.isnan(Theta).any() or np.isinf(Theta).any():
+            raise ValueError(f'Expected Theta not to have nan or inf values')
         if K is not None and Theta.shape[0] != K:
             raise ValueError(f'Expected Theta to have shape[0] = {K}, got {Theta.shape[0]}')
         elif ret_shapes or R is not None or X_pix is not None:
@@ -56,6 +61,8 @@ def validate_scene_arrays_shapes(
             raise ValueError(f'Expected R to have ndim = 3, got {R.ndim}')
         if R.shape[1:] != (3, 3):
             raise ValueError(f'Expected R to have shape[1:] = (3, 3), got {R.shape[1:]}')
+        if np.isnan(R).any() or np.isinf(R).any():
+            raise ValueError(f'Expected R not to have nan or inf values')
         if K is not None and R.shape[0] != K:
             raise ValueError(f'Expected R to have shape[0] = {K}, got {R.shape[0]}')
         elif ret_shapes or X_pix is not None:
@@ -117,33 +124,9 @@ def rz(theta: NDArray[np.floating]) -> NDArray[np.floating]:
     R[:,0,1] = - R[:,1,0]
     return R
 
-def ryxz(
-        Theta: NDArray[np.floating],
-        _validate: bool = True
-    ) -> NDArray[np.floating]:
+def ryxz(Theta: NDArray[np.floating], _validate: bool = True) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(Theta=Theta)
     return ry(Theta[:,1]) @ rx(Theta[:,0]) @ rz(Theta[:,2])
-
-# def d_rx(theta: NDArray[np.floating]) -> NDArray[np.floating]:
-#     R = np.zeros((theta.size, 3, 3))
-#     R[:,1,1] = R[:,2,2] = - np.sin(theta)
-#     R[:,2,1] = np.cos(theta)
-#     R[:,1,2] = - R[:,2,1]
-#     return R
-
-# def d_ry(theta: NDArray[np.floating]) -> NDArray[np.floating]:
-#     R = np.zeros((theta.size, 3, 3))
-#     R[:,0,0] = R[:,2,2] = - np.sin(theta)
-#     R[:,0,2] = np.cos(theta)
-#     R[:,2,0] = - R[:,0,2]
-#     return R
-
-# def d_rz(theta: NDArray[np.floating]) -> NDArray[np.floating]:
-#     R = np.zeros((theta.size, 3, 3))
-#     R[:,0,0] = R[:,1,1] = - np.sin(theta)
-#     R[:,1,0] = np.cos(theta)
-#     R[:,0,1] = - R[:,1,0]
-#     return R
 
 
 def project(
@@ -167,22 +150,6 @@ def project(
     return X_proj
 
 
-# def enforce_int_img_arg(position):
-#     """
-#     Check if function argument in the position is H instead of r.
-#     """
-#     def decorator(func):
-#         @wraps(func)
-#         def wrapper(*args, **kwargs):
-#             value = args[position]
-#             if not isinstance(value, int):
-#                 raise TypeError(f'This function now gets argument H instead of r')
-#             return func(*args, **kwargs)
-#         return wrapper
-#     return decorator
-
-
-# @enforce_int_img_arg(5)
 def reverse_project(
         X_pix: NDArray[np.integer],
         C: NDArray[np.floating],
@@ -211,7 +178,6 @@ def reverse_project(
     return X_proj
 
 
-# @enforce_int_img_arg(5)
 def transform(
         X: NDArray[np.floating],
         C: NDArray[np.floating],
@@ -508,7 +474,6 @@ def form_params_dict(
             val['all_iters'] = max_iters * [None]
 
 
-# @enforce_int_img_arg(2)
 def fit_scene(
         X_pix: NDArray[np.integer],
         W: int,
@@ -531,9 +496,6 @@ def fit_scene(
         ret_all_iters: bool = False
     ) -> list[Union[NDArray[np.floating], np.floating]]:
     N, K = validate_scene_arrays_shapes(X=X_0, C=C_0, Theta=Theta_0, X_pix=X_pix, ret_shapes=True)
-
-    if np.isnan(X_0).any() or np.isnan(C_0).any() or np.isnan(Theta_0).any():
-        raise ValueError('Initial values for X, C and Theta have to be not nan')
 
     if not X_mask and not C_Theta_mask and not phi_x_mask:
         raise ValueError('At least one of X_mask, C_Theta_mask or phi_x_mask have to be true')
@@ -797,11 +759,22 @@ def fit_subscenes_GD(
         raise ValueError(f'Unable to solve the problem, subscenes {subscene_connections_zero} are not properly connected to the other subscenes')
 
     if S_0 is None: S = np.ones(P)
-    else: S = S_0.copy()
+    else:
+        if S_0.size != P:
+            raise ValueError(f'Expected S_0 to have size = P, got {S_0.size}')
+        S = S_0.copy()
+    
     if T_0 is None: T = np.zeros((P, 3))
-    else: T = T_0.copy()
+    else:
+        if T_0.shape != (P, 3):
+            raise ValueError(f'Expected T_0 to have shape = (P, 3), got {T_0.shape}')
+        T = T_0.copy()
+    
     if Psi_0 is None: Psi = np.zeros((P, 3))
-    else: Psi = Psi_0.copy()
+    else:
+        if Psi_0.shape != (P, 3):
+            raise ValueError(f'Expected Psi_0 to have shape = (P, 3), got {Psi_0.shape}')
+        Psi = Psi_0.copy()
 
     D_Rx, D_Ry, D_Rz = np.zeros((3, P, 3, 3))
 
@@ -1074,33 +1047,16 @@ def draw_input_pix(
     ax.set_xticks(np.linspace(0, W, 5))
     ax.set_yticks(np.linspace(H, 0, 5))
 
-    # I_visible = np.where(X_pix[:,j_slider.val,0] >= 0)
-    # X_pix_center = X_pix[:,j_slider.val][I_visible] + 0.5
-
-    # X_points = ax.scatter(*X_pix_center.T, s=15.0, marker='o', color='red', zorder=10)
-    # pix_corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
-    # X_squares = PolyCollection(X_pix_center[:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
-    #                                linewidths=1.0, edgecolors='red', facecolor='none')
-    # ax.add_collection(X_squares)
-
-    # if image_paths is not None:
-    #     img_show = ax.imshow(imread(image_paths[j_slider.val]), extent=(0, W, H, 0), alpha=0.5)
-
-    # def update(val):
-    #     I_visible = np.where(X_pix[:,j_slider.val,0] >= 0)
-    #     X_pix_center = X_pix[:,j_slider.val][I_visible] + 0.5
-
-    #     X_points.set_offsets(X_pix_center)
-    #     X_squares.set_verts(X_pix_center[:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
-
-    #     if image_paths is not None:
-    #         img_show.set_array(imread(image_paths[j_slider.val]))
-
     X_visible = X_pix[:,:,0] >= 0
     X_pix_center = np.full((N, K, 2), np.nan)
     X_pix_center[X_visible] = X_pix[X_visible] + 0.5
 
-    X_points = ax.scatter(*X_pix_center[:,j_slider.val].T, s=15.0, marker='o', color='red', zorder=10)
+    X_points = ax.scatter(*X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]].T, s=15.0, marker='o', color='red', zorder=10)
+
+    pix_corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
+    X_squares = PolyCollection(X_pix[:,j_slider.val][X_visible[:,j_slider.val]][:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
+                               linewidths=1.0, edgecolors='red', facecolor='none')
+    ax.add_collection(X_squares)
 
     if trace_len > 0:
         X_traces = LineCollection(X_pix_center[:, max(0, j_slider.val-trace_len) : j_slider.val+1], color='red', linewidth=1.0)
@@ -1110,7 +1066,8 @@ def draw_input_pix(
         img_show = ax.imshow(imread(image_paths[j_slider.val]), extent=(0, W, H, 0), alpha=0.5)
 
     def update(val):
-        X_points.set_offsets(X_pix_center[:,j_slider.val])
+        X_points.set_offsets(X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]])
+        X_squares.set_verts(X_pix[:,j_slider.val][X_visible[:,j_slider.val]][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
         if trace_len > 0:
             X_traces.set_segments(X_pix_center[:, max(0, j_slider.val-trace_len) : j_slider.val+1])
 
@@ -1884,7 +1841,7 @@ def get_H_diff_matrix(
 
     H_diff_matrix = np.full((K, K), np.nan)
 
-    for j1 in tqdm(range(K), desc='Calculating H_diff_matrix', ascii=' █'):
+    for j1 in tqdm(range(K), desc='Calculating H_diff_matrix'):
         for j2 in range(j1 + 1, K):
             I = np.where(X_visible[:,j1] * X_visible[:,j2])[0]
             if I.size < 10: continue        # нужно проверить
@@ -2006,117 +1963,6 @@ def find_phi_x(
         E_diff = np.nan_to_num(E_array.max() - E_array.min())
 
     return phi_x_opt
-
-
-# def get_pair_subscenes(
-#         X_pix: NDArray[np.integer],
-#         phi_x: Union[np.floating, float],
-#         W: int,
-#         H: int,
-#         H_diff_bool: NDArray[np.bool_],
-#         max_size: int = 50,
-#         normalize: bool = False
-#     ) -> tuple[list[NDArray[np.integer]], list[NDArray[np.floating]], list[NDArray[np.floating]], list[NDArray[np.floating]]]:
-#     N, K = validate_scene_arrays_shapes(X_pix=X_pix)
-#     # K = X_pix.shape[1]
-#     X_visible = X_pix[:,:,0] >= 0
-
-#     j_subset_list = []
-#     j_subset_all = np.zeros(0)  # индексы всех просмотренных кадров
-#     X_pairs_list = []
-#     C_pairs_list = []
-#     Theta_pairs_list = []
-
-#     iter = 0
-#     finish = False
-#     while j_subset_all.size < max_size:
-#         X_pairs = []
-#         C_pairs = []
-#         Theta_pairs = []
-
-#         if iter >= 2:            
-#             if iter % 2 == 0:
-#                 id_1, id_2 = 0, 1
-#                 j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
-#                 while j_2 - j_1 < 2:
-#                     id_1 += 1
-#                     id_2 += 1
-#                     if id_2 > j_subset_all.size - 1:
-#                         finish = True
-#                     j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
-#                 j = int(np.floor((j_1 + j_2) / 2))
-#             else:
-#                 id_1, id_2 = j_subset_all.size - 1, j_subset_all.size - 2
-#                 j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
-#                 while j_1 - j_2 < 2:
-#                     id_1 -= 1
-#                     id_2 -= 1
-#                     if id_1 < 0:
-#                         finish = True
-#                     j_1, j_2 = j_subset_all[id_1], j_subset_all[id_2]
-#                 j = int(np.ceil((j_1 + j_2) / 2))
-#             if finish: break
-#         else:
-#             if iter == 0: j = 0
-#             else: j = K - 1
-#         j_ = []
-#         done = False
-#         success = True
-#         while True:
-#             if success:
-#                 j_.append(j)
-#                 step = 0
-#             found_next = False
-#             while not found_next:
-#                 if iter % 2 == 0: step += 1
-#                 else: step -= 1
-#                 if (iter % 2 == 0 and j + step >= K - 1) or (iter % 2 == 1 and j + step <= 0):
-#                     done = True
-#                     break
-#                 if j + step in j_subset_all:
-#                     continue
-#                 found_next = H_diff_bool[j, j+step]
-#             if done: break
-
-#             print(f'{j = }, {step = }')
-#             i_subset = np.where(X_visible[:,j] * X_visible[:,j+step])[0]
-#             print(f'{i_subset.size = }')
-#             if iter % 2 == 0: ij_subset = np.ix_(i_subset, [j, j+step])
-#             else: ij_subset = np.ix_(i_subset, [j+step, j])
-#             F = fundamental_matrix(X_pix[ij_subset], normalize=normalize, W=W, H=H)
-#             X_, C, Theta, success = get_X_C_Theta_from_F(X_pix[ij_subset], F, W, H, phi_x, ret_status=True, normalized=normalize)
-            
-#             print(f'{success = }')
-#             if not success: continue
-
-#             X = np.full((X_pix.shape[0], 3), np.nan)
-#             X[i_subset] = X_
-
-#             X_pairs.append(X)
-#             C_pairs.append(C)
-#             Theta_pairs.append(Theta)
-
-#             j += step
-
-#         j_ = np.array(j_)
-#         j_subset_all = np.sort(np.concatenate((j_subset_all, j_)))
-#         if j_.size > 1:
-#             X_pairs = np.array(X_pairs)
-#             C_pairs = np.array(C_pairs)
-#             Theta_pairs = np.array(Theta_pairs)
-#             if iter % 2 == 1:
-#                 j_ = j_[::-1]
-#                 X_pairs = X_pairs[::-1]
-#                 C_pairs = C_pairs[::-1]
-#                 Theta_pairs = Theta_pairs[::-1]
-            
-#             j_subset_list.append(j_)
-#             X_pairs_list.append(X_pairs)
-#             C_pairs_list.append(C_pairs)
-#             Theta_pairs_list.append(Theta_pairs)
-#         iter += 1
-
-#     return j_subset_list, X_pairs_list, C_pairs_list, Theta_pairs_list
 
 
 def get_subscenes_with_number(
@@ -2268,8 +2114,10 @@ def get_C_Theta_from_subscenes(
         _validate: bool = True
     ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     if _validate:
-        N, K = validate_scene_arrays_shapes(X=X, X_pix=X_pix, ret_shapes=True)
-        # нужно добавить проверки для C_extra и Theta_extra
+        if C_extra is None and Theta_extra is None:
+            N, K = validate_scene_arrays_shapes(X=X, X_pix=X_pix, ret_shapes=True)
+        else:
+            N, K = validate_scene_arrays_shapes(X=X, C=C_extra, Theta=Theta_subsc, X_pix=X_pix, ret_shapes=True)
     else: K = X_pix.shape[1]
 
     X_visible = X_pix[:,:,0] >= 0
@@ -2315,26 +2163,37 @@ def get_C_Theta_from_subscenes(
     return C, Theta
 
 
-def approximate(j_small, j_big, X_small, extrapolate=False):
-    # предполагается, что j_big[0] <= j_small[0] и j_big[-1] >= j_small[-1]
-    if X_small.ndim == 1: X_big = np.full(j_big.size, np.nan)
-    else: X_big = np.full((j_big.size, *X_small.shape[1:]), np.nan)
+def approximate(
+        J_small: NDArray[np.integer],
+        J_big: NDArray[np.integer],
+        X_small: NDArray[np.floating],
+        extrapolate: bool = False
+    ) -> NDArray[np.floating]:
+    if J_small.size == X_small.shape[0]:
+        raise ValueError('Expected J_small.size = X_small.shape[0]')
+    if J_big[0] > J_small[0]:
+        raise ValueError('Expected J_big[0] <= J_small[0]')
+    if J_big[-1] < J_small[-1]:
+        raise ValueError('Expected J_big[-1] >= J_small[-1]')
+
+    if X_small.ndim == 1: X_big = np.full(J_big.size, np.nan)
+    else: X_big = np.full((J_big.size, *X_small.shape[1:]), np.nan)
 
     if not extrapolate:
-        X_big[:j_small[0]+1] = X_small[0]
-        X_big[j_small[-1]:] = X_small[-1]
+        X_big[:J_small[0]+1] = X_small[0]
+        X_big[J_small[-1]:] = X_small[-1]
     else:
-        for l in range(j_small[0] + 1):
-            X_big[l] = X_small[0] + (j_big[l] - j_small[0]) / (j_small[1] - j_small[0]) * (X_small[1] - X_small[0])
-        for l in range(j_small[-1], j_big[-1] + 1):
-            X_big[l] = X_small[-1] + (j_big[l] - j_small[-1]) / (j_small[-1] - j_small[-2]) * (X_small[-1] - X_small[-2])
+        for l in range(J_small[0] + 1):
+            X_big[l] = X_small[0] + (J_big[l] - J_small[0]) / (J_small[1] - J_small[0]) * (X_small[1] - X_small[0])
+        for l in range(J_small[-1], J_big[-1] + 1):
+            X_big[l] = X_small[-1] + (J_big[l] - J_small[-1]) / (J_small[-1] - J_small[-2]) * (X_small[-1] - X_small[-2])
     
-    k, l = 0, j_small[0] + 1
-    while k < j_small.size - 1:
-        if j_big[l] >= j_small[k] and j_big[l] < j_small[k+1]:
-            X_big[l] = X_small[k] + (j_big[l] - j_small[k]) / (j_small[k+1] - j_small[k]) * (X_small[k+1] - X_small[k])
+    k, l = 0, J_small[0] + 1
+    while k < J_small.size - 1:
+        if J_big[l] >= J_small[k] and J_big[l] < J_small[k+1]:
+            X_big[l] = X_small[k] + (J_big[l] - J_small[k]) / (J_small[k+1] - J_small[k]) * (X_small[k+1] - X_small[k])
             l += 1
-        elif j_big[l] >= j_small[k+1]:
+        elif J_big[l] >= J_small[k+1]:
             k += 1
 
     return X_big
@@ -2440,5 +2299,5 @@ def generate_points(N, AR, ARC, view_bounds, gen_bounds, seed):
         ids = np.where((ARX > ARC).all(axis=(1, 2)))[0]
         X[N_:N_+ids.size] = X_[ids]
         N_ += ids.size
-    
+
     return X
