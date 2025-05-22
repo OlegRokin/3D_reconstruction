@@ -521,6 +521,9 @@ def fit_scene(
         if components_num > 1:
             raise ValueError(f'Unable to solve the problem, expected the number of connected components of visibility graph to be 1, got {components_num}')
 
+    if optimizer not in gd_func_dict:
+        raise ValueError(f'Unkown name of the optmizer, choose one from {[key for key in gd_func_dict]}')
+
     WH_2 = np.array([W, H]) / 2.0
     X_pix_center = X_pix[X_visible] + 0.5
     X, C, Theta, phi_x = X_0.copy(), C_0.copy(), Theta_0.copy(), np.array([phi_x_0])
@@ -757,6 +760,9 @@ def fit_subscenes_GD(
     subscene_connections_zero = np.where(subscene_connections == 0)[0]
     if subscene_connections_zero.size > 0:
         raise ValueError(f'Unable to solve the problem, subscenes {subscene_connections_zero} are not properly connected to the other subscenes')
+
+    if optimizer not in gd_func_dict:
+        raise ValueError(f'Unkown name of the optmizer, choose one from {[key for key in gd_func_dict]}')
 
     if S_0 is None: S = np.ones(P)
     else:
@@ -2117,7 +2123,7 @@ def get_C_Theta_from_subscenes(
         if C_extra is None and Theta_extra is None:
             N, K = validate_scene_arrays_shapes(X=X, X_pix=X_pix, ret_shapes=True)
         else:
-            N, K = validate_scene_arrays_shapes(X=X, C=C_extra, Theta=Theta_subsc, X_pix=X_pix, ret_shapes=True)
+            N, K = validate_scene_arrays_shapes(X=X, C=C_extra, Theta=Theta_extra, X_pix=X_pix, ret_shapes=True)
     else: K = X_pix.shape[1]
 
     X_visible = X_pix[:,:,0] >= 0
