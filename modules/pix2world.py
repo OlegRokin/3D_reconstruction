@@ -1,5 +1,3 @@
-NAME = "pix2world"
-
 from typing import Any, Callable, Literal, Optional, Union
 from warnings import warn
 from tqdm import tqdm
@@ -63,6 +61,12 @@ def validate_scene_arrays_shapes(
             raise ValueError(f'Expected R to have shape[1:] = (3, 3), got {R.shape[1:]}')
         if np.isnan(R).any() or np.isinf(R).any():
             raise ValueError(f'Expected R not to have nan or inf values')
+        if (np.abs(R.transpose(0, 2, 1) @ R - np.eye(3)) > 1e-9).any():     # np.einsum('jkl,jkn->jln', R, R)
+            raise ValueError('Expected R[i] @ R[i].T must be approximately equal to eye(3) for all i,'
+                             'you may try orthogonolize_matrix(R) to fix it.')
+        if (np.abs(np.linalg.det(R) - 1.0) > 1e-9).any():
+            raise ValueError('Expected R[i] to have determinant approximately 1.0 for all i,'
+                             'you may try R *= np.sign(np.linalg.det(R))[:,np.newaxis,np.newaxis] to fix it.')
         if K is not None and R.shape[0] != K:
             raise ValueError(f'Expected R to have shape[0] = {K}, got {R.shape[0]}')
         elif ret_shapes or X_pix is not None:
@@ -242,17 +246,17 @@ def orthogonolize_matrix(
 
 def get_rotations(
         R: NDArray[np.floating],
-        orthogonolize: bool = False,
+        # orthogonolize: bool = False,
         _validate: bool = True
     ) -> NDArray[np.floating]:
     if _validate: validate_scene_arrays_shapes(R=R)
-    if orthogonolize:
-        R, _ = orthogonolize_matrix(R, _validate=False)
-    else:
-        if (np.abs(R.transpose(0, 2, 1) @ R - np.eye(3)) > 1e-9).any():     # np.einsum('jkl,jkn->jln', R, R)
-            raise ValueError('Expected R[i] to be normal for all i (R[i] @ R[i].T must be approximately equal to eye(3)).')
-        if (np.abs(np.linalg.det(R) - 1.0) > 1e-9).any():
-            raise ValueError('Expected R[i] to have determinant approximately 1.0 for all i.')
+    # if orthogonolize:
+    #     R, _ = orthogonolize_matrix(R, _validate=False)
+    # else:
+    #     if (np.abs(R.transpose(0, 2, 1) @ R - np.eye(3)) > 1e-9).any():     # np.einsum('jkl,jkn->jln', R, R)
+    #         raise ValueError('Expected R[i] to be normal for all i, R[i] @ R[i].T must be approximately equal to eye(3).')
+    #     if (np.abs(np.linalg.det(R) - 1.0) > 1e-9).any():
+    #         raise ValueError('Expected R[i] to have determinant approximately 1.0 for all i.')
 
     C_x = np.sqrt(R[:,1,0]**2 + R[:,1,1]**2)
     S_x = - R[:,1,2]
@@ -1056,11 +1060,12 @@ def draw_input_pix(
     X_visible = X_pix[:,:,0] >= 0
     X_pix_center = np.full((N, K, 2), np.nan)
     X_pix_center[X_visible] = X_pix[X_visible] + 0.5
+    X_pix_center_current = X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]]
 
-    X_points = ax.scatter(*X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]].T, s=15.0, marker='o', color='red', zorder=10)
+    X_points = ax.scatter(*X_pix_center_current.T, s=15.0, marker='o', color='red', zorder=10)
 
-    pix_corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
-    X_squares = PolyCollection(X_pix[:,j_slider.val][X_visible[:,j_slider.val]][:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
+    pix_corners = np.array([[-0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0.5, -0.5]])
+    X_squares = PolyCollection(X_pix_center_current[:,np.newaxis,:] + pix_corners[np.newaxis,:,:],
                                linewidths=1.0, edgecolors='red', facecolor='none')
     ax.add_collection(X_squares)
 
@@ -1072,8 +1077,9 @@ def draw_input_pix(
         img_show = ax.imshow(imread(image_paths[j_slider.val]), extent=(0, W, H, 0), alpha=0.5)
 
     def update(val):
-        X_points.set_offsets(X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]])
-        X_squares.set_verts(X_pix[:,j_slider.val][X_visible[:,j_slider.val]][:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
+        X_pix_center_current = X_pix_center[:,j_slider.val][X_visible[:,j_slider.val]]
+        X_points.set_offsets(X_pix_center_current)
+        X_squares.set_verts(X_pix_center_current[:,np.newaxis,:] + pix_corners[np.newaxis,:,:])
         if trace_len > 0:
             X_traces.set_segments(X_pix_center[:, max(0, j_slider.val-trace_len) : j_slider.val+1])
 
@@ -1597,8 +1603,8 @@ def get_X_from_C_Theta(
 
     A_3dim_mat, A_2dim_vec = A_3dim[IJ1_][:,:,:-1], A_3dim[IJ1_][:,:,-1]
     A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_3dim_mat, A_3dim_mat)
-    A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_2dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_3dim_mat, A_3dim_vec)
-    X[I0[I1]] = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
+    A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_2dim_vec[:,:,np.newaxis])        # np.einsum('ilj,il->ij', A_3dim_mat, A_3dim_vec)[:,:,np.newaxis]
+    X[I0[I1]] = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)[:,:,0]
 
     return X
 
@@ -1794,6 +1800,7 @@ def get_X_C_Theta_from_F(
     t_0 = U[:,-1]
     t_1 = - U[:,-1]
     Rt_cases = ((R_0, t_0), (R_0, t_1), (R_1, t_0), (R_1, t_1))
+
     for Rt_case in Rt_cases:
         R, t = Rt_case
         
@@ -1805,8 +1812,8 @@ def get_X_C_Theta_from_F(
 
         A_3dim_mat, A_3dim_vec = A_3dim[:,:,:-1], A_3dim[:,:,-1]
         A_lstsq_mat = A_3dim_mat.transpose(0, 2, 1) @ A_3dim_mat        # np.einsum('ilj,ilk->ijk', A_array_mat, A_array_mat)
-        A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_3dim_vec[:,:,np.newaxis])[:,:,0]        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)
-        X = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)
+        A_lstsq_vec = (A_3dim_mat.transpose(0, 2, 1) @ A_3dim_vec[:,:,np.newaxis])        # np.einsum('ilj,il->ij', A_array_mat, A_array_vec)[:,:,np.newaxis]
+        X = - np.linalg.solve(A_lstsq_mat, A_lstsq_vec)[:,:,0]
         
         C = np.vstack((np.zeros(3), - R.T @ t))
 
