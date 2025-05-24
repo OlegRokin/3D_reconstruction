@@ -1206,7 +1206,7 @@ def draw_2d_3d_scene(
     C_points_marker = ' ' if not trajectory_markers else 'o'
     C_points_linestyle = '-' if trajectory else 'none'
     ax0.plot(*C_show.T, color='blue', linestyle=C_points_linestyle, marker=C_points_marker, markersize=2)
-    C_current_point = ax0.scatter(*C_show[j], marker='o', s=16, color='blue', depthshade=False)
+    C_current_point = ax0.scatter(*C_show[j,:], marker='o', s=16, color='blue', depthshade=False)
 
     if show_image_lines:
         X_proj = project(X[I_model_visible], C[j].reshape(1, -1), Theta[j].reshape(1, -1), f, _validate=False)[:,0,:]
@@ -1335,7 +1335,7 @@ def draw_2d_3d_scene(
         camera_dir_line.set_data(*camera_dir_array[:,:2].T)
         camera_dir_line.set_3d_properties(camera_dir_array[:,2])
 
-        center_to_corners.set_segments(np.stack((np.tile(C_show[j:], (4, 1)),
+        center_to_corners.set_segments(np.stack((np.tile(C_show[j,:], (4, 1)),
                                                  C_show[j,:] + f * camera_corners_rot), axis=1))
         corners_surface.set_verts([C_show[j,:] + f * camera_corners_rot])
 
